@@ -28,11 +28,11 @@ It was built as the voice input of [MintBot](https://github.com/Momordicin/MintB
 
 ## Quick start
 
-Add the client from a release (replace `<owner>/<repo>` and the versions with
-those of the release you use):
+Add the client from a [release](https://github.com/Momordicin/mintbot-voice-agent/releases)
+(replace the versions with those of the release you use):
 
 ```powershell
-pnpm add https://github.com/<owner>/<repo>/releases/download/v0.1.1/mintbot-voice-agent-client-0.3.0.tgz
+pnpm add https://github.com/Momordicin/mintbot-voice-agent/releases/download/v0.1.1/mintbot-voice-agent-client-0.3.0.tgz
 ```
 
 Install the agent once, then keep it running:
@@ -41,7 +41,7 @@ Install the agent once, then keep it running:
 import path from "node:path";
 import { API_VERSION, installVoiceAgent, readInstallation, VoiceAgentSupervisor } from "@mintbot/voice-agent-client";
 
-const manifest = "https://github.com/<owner>/<repo>/releases/download/v0.1.1/manifest.json";
+const manifest = "https://github.com/Momordicin/mintbot-voice-agent/releases/download/v0.1.1/manifest.json";
 const root = path.join(process.env.LOCALAPPDATA!, "MyApp", "voice-agent");      // where the agent is installed
 const voiceprint = path.join(process.env.APPDATA!, "MyApp", "voiceprint.json"); // user data: keep it outside root
 

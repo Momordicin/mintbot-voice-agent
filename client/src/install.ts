@@ -21,6 +21,8 @@ import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 
+import { extractZip } from "./unzip.ts";
+
 const run = promisify(execFile);
 
 export interface PackageInfo {
@@ -267,9 +269,8 @@ async function installPackage(o: InstallOptions, kind: InstallProgress["package"
     const out = path.join(tmp, "x");
     await fs.mkdir(out);
     try {
-      // bsdtar ships with Windows 10 1803+ and extracts zip archives; Git's GNU tar on PATH does not
-      await run(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"), ["-xf", archive, "-C", out],
-                { signal: o.signal, windowsHide: true });
+      // in-process, not tar.exe: that one fails for paths outside the ANSI code page
+      await extractZip(archive, out, o.signal);
     } catch (e) {
       throw asInstallError(o, e, () => new VoiceInstallError("EXTRACT_FAILED", `${pkg.file}: cannot extract (${(e as Error).message})`, { file: pkg.file }, e));
     }
@@ -281,7 +282,7 @@ async function installPackage(o: InstallOptions, kind: InstallProgress["package"
     say(`${pkg.file}: installed to ${dest}`);
     step({ package: kind, phase: "done" });
   } finally {
-    // tar may still hold files for a moment after a cancellation
+    // a write stream cut off by a cancellation may still hold its file for a moment
     await fs.rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => {});
   }
 }

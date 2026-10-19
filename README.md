@@ -22,7 +22,7 @@ It was built as the voice input of [MintBot](https://github.com/Momordicin/MintB
 
 ## Requirements
 
-- Windows 10 1803 or later, x64
+- Windows 10 or later, x64
 - Node.js 22 or later in the host app
 - About 600 MB free disk space while installing (about 300 MB afterwards)
 

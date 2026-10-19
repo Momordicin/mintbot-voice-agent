@@ -71,8 +71,9 @@ describe("release", { skip }, () => {
   let inst: Installation;
 
   before(async () => {
-    // a non-ASCII path, like a Chinese user name in %LOCALAPPDATA%
-    root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "voice-rel-")), "用户_张三", "voice-agent");
+    // a non-ASCII user name in %LOCALAPPDATA%, with characters outside any single ANSI
+    // code page (Chinese and Korean), so nothing here may go through a narrow API
+    root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "voice-rel-")), "用户_张三_한글", "voice-agent");
     inst = await installVoiceAgent({ manifest: manifest!, root, apiVersion: API_VERSION });
   });
   after(() => fs.rmSync(path.dirname(path.dirname(root)), { recursive: true, force: true }));

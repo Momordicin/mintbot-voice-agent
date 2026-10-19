@@ -108,6 +108,10 @@ def main():
                     help="only the client tarball, into <out>/<client version>/ (the agent and model "
                          "packages are unchanged); --bin is used to check the API version")
     args = ap.parse_args()
+    # paths may hold characters the console code page cannot (cp1252 on an English
+    # system): print them escaped instead of failing
+    sys.stdout.reconfigure(errors="backslashreplace")
+    sys.stderr.reconfigure(errors="backslashreplace")
     build = args.build or os.path.dirname(os.path.abspath(args.bin))
 
     exe = need(os.path.join(args.bin, "mintbot-voice-agent.exe"))

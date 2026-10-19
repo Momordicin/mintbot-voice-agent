@@ -95,6 +95,10 @@ def main():
     ap.add_argument("--skip-build", action="store_true", help="reuse --build-dir as it is")
     ap.add_argument("--source", action="append", default=[], help="passed to tools/export_models.py")
     args = ap.parse_args()
+    # paths may hold characters the console code page cannot (cp1252 on an English
+    # system): print them escaped instead of failing
+    sys.stdout.reconfigure(errors="backslashreplace")
+    sys.stderr.reconfigure(errors="backslashreplace")
     version, api = project_version()
     if args.tag and args.tag != f"v{version}":
         sys.exit(f"tag {args.tag} does not match CMakeLists.txt version {version}")
@@ -112,7 +116,8 @@ def main():
     # 2. models from the official weights, byte-identical to the validated ones
     models = os.path.join(ROOT, "build-models", "out")
     exp = run([sys.executable, os.path.join(ROOT, "tools", "export_models.py"), "--out", models]
-              + sum((["--source", s] for s in args.source), []), stdout=subprocess.PIPE, text=True)
+              + sum((["--source", s] for s in args.source), []), stdout=subprocess.PIPE,
+              env={**os.environ, "PYTHONUTF8": "1"}, encoding="utf-8")  # the smoke WAV path comes back verbatim
     print(exp.stdout, end="")
     smoke_wav = exp.stdout.strip().splitlines()[-1]
 

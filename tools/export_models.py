@@ -59,6 +59,10 @@ def main():
     ap.add_argument("--source", action="append", default=[], metavar="ROLE=DIR",
                     help="use original files already on disk for a model role (asr, vad, speaker); still hash-checked")
     args = ap.parse_args()
+    # paths may hold characters the console code page cannot (cp1252 on an English
+    # system): print them escaped instead of failing
+    sys.stdout.reconfigure(errors="backslashreplace")
+    sys.stderr.reconfigure(errors="backslashreplace")
     lock = json.load(open(os.path.join(ROOT, "tools", "models.lock.json"), encoding="utf-8"))
     sources = dict(s.split("=", 1) for s in args.source)
     os.makedirs(args.out, exist_ok=True)

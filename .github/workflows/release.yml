@@ -64,5 +64,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           version="${{ github.ref_name }}"
-          gh release create "$version" dist/"${version#v}"/* --title "$version" --notes-file dist/RELEASE_NOTES.md
+          files=(dist/"${version#v}"/*)
+          [ "${#files[@]}" -eq 5 ] || { echo "expected 5 release files, got: ${files[*]}"; exit 1; }
+          # re-running the job (e.g. after a failed upload) replaces the files instead of failing
+          if gh release view "$version" >/dev/null 2>&1; then
+            gh release upload "$version" "${files[@]}" --clobber
+            gh release edit "$version" --notes-file dist/RELEASE_NOTES.md
+          else
+            gh release create "$version" "${files[@]}" --title "$version" --notes-file dist/RELEASE_NOTES.md
+          fi

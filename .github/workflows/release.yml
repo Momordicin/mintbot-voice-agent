@@ -1,0 +1,66 @@
+# Builds a release on a clean Windows runner: portable binaries, models re-exported
+# from the official ModelScope weights (verified byte-identical, tools/models.lock.json),
+# packages, and the client tests against exactly those packages.
+#   push a tag v<version> (= project VERSION in CMakeLists.txt) -> GitHub release with the files
+#   run manually (Actions -> release -> Run workflow)              -> the files as a build artifact
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build-time Python packages (model export, meson)
+        run: pip install -r tools/requirements-release.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: Visual Studio developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Cache the official model weights
+        uses: actions/cache@v4
+        with:
+          path: build-models/modelscope
+          key: modelscope-${{ hashFiles('tools/models.lock.json') }}
+
+      - name: Build, export models, package, test
+        shell: bash
+        run: |
+          tag=""
+          if [ "${{ github.ref_type }}" = "tag" ]; then tag="--tag ${{ github.ref_name }}"; fi
+          python tools/build_release.py --out dist $tag
+
+      - name: Keep the files (manual runs)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mintbot-voice-agent-release
+          path: dist
+
+      - name: Publish the GitHub release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ github.ref_name }}"
+          gh release create "$version" dist/"${version#v}"/* --title "$version" --notes-file dist/RELEASE_NOTES.md

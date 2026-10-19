@@ -1,0 +1,33 @@
+# build output
+build/
+build-p/
+build-models/
+dist/
+client/node_modules/
+client/dist/
+*.tgz
+__pycache__/
+*.pyc
+
+# models: rebuilt from the official weights (tools/export_models.py), never committed
+models/*.gguf
+
+# personal data: recordings, voiceprints (biometric), event logs and the
+# directories the test tools are usually pointed at
+*.wav
+*.voiceprint.json
+*.voiceprint.json.tmp
+*.events.jsonl
+rec/
+tmp/
+
+# local test and benchmark output
+/*.json
+*.log
+
+# editors
+.vs/
+.vscode/
+
+# the author's own work log exports
+docs/

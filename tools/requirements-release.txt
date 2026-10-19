@@ -1,0 +1,10 @@
+# Build-time only (model export and the WebRTC AudioProcessing build); nothing here
+# ships in a release. The model exports were verified byte-identical with these
+# versions (tools/models.lock.json). torch: install the CPU wheel, e.g.
+#   pip install -r tools/requirements-release.txt --extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1
+numpy==1.26.4
+gguf==0.19.0
+sentencepiece==0.2.1
+modelscope==1.40.2
+meson==1.12.1

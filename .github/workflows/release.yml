@@ -42,12 +42,14 @@ jobs:
           path: build-models/modelscope
           key: modelscope-${{ hashFiles('tools/models.lock.json') }}
 
+      # PowerShell, not bash: Git Bash puts Git's GNU link.exe ahead of MSVC's linker on PATH
       - name: Build, export models, package, test
-        shell: bash
+        shell: pwsh
         run: |
-          tag=""
-          if [ "${{ github.ref_type }}" = "tag" ]; then tag="--tag ${{ github.ref_name }}"; fi
-          python tools/build_release.py --out dist $tag
+          $tag = @()
+          if ("${{ github.ref_type }}" -eq "tag") { $tag = @("--tag", "${{ github.ref_name }}") }
+          python tools/build_release.py --out dist @tag
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Keep the files (manual runs)
         if: github.ref_type != 'tag'

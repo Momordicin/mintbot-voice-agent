@@ -43,11 +43,25 @@ def project_version():
     return v.group(1), int(api.group(1))
 
 
+def without_gnu_link(env):
+    """Moves Git's usr/bin to the end of PATH: its link.exe (a GNU file tool) would
+    otherwise shadow MSVC's linker, which meson then refuses (Git Bash, e.g. a CI
+    `shell: bash` step, puts it first)."""
+    key = next((k for k in env if k.upper() == "PATH"), "PATH")
+    parts = env.get(key, "").split(os.pathsep)
+    gnu = [p for p in parts if os.path.normcase(os.path.normpath(p)).endswith(os.path.normcase(os.path.join("git", "usr", "bin")))]
+    env[key] = os.pathsep.join([p for p in parts if p not in gnu] + gnu)
+    link = shutil.which("link", path=env[key]) or ""
+    if "msvc" not in link.lower():
+        print(f"warning: the first link.exe on PATH is not MSVC's: {link or 'none'}", flush=True)
+    return env
+
+
 def msvc_env():
     """The environment of a VS developer prompt: the current one if cl.exe is on PATH,
-    else the one vcvars64.bat sets up."""
+    else the one vcvars64.bat sets up; Git's GNU link.exe moved out of the way."""
     if shutil.which("cl"):
-        return None
+        return without_gnu_link(dict(os.environ))
     candidates = []
     vswhere = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
                            "Microsoft Visual Studio", "Installer", "vswhere.exe")
@@ -61,7 +75,7 @@ def msvc_env():
         bat = os.path.join(vs, "VC", "Auxiliary", "Build", "vcvars64.bat")
         if os.path.exists(bat):
             out = subprocess.run(f'cmd /c ""{bat}" >nul && set"', capture_output=True, text=True, shell=True).stdout
-            return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+            return without_gnu_link(dict(line.split("=", 1) for line in out.splitlines() if "=" in line))
     sys.exit("MSVC not found: run from a Developer PowerShell for VS 2022")
 
 

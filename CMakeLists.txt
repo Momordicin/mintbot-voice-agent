@@ -138,6 +138,10 @@ set_target_properties(mdsp PROPERTIES CXX_STANDARD 20)
 if(MINTBOT_WITH_APM)
     target_compile_definitions(mdsp PRIVATE MINTBOT_HAVE_APM)
     target_link_libraries(mdsp PRIVATE webrtc_apm)
+    # AEC3's own class (modules/audio_processing/aec3) is not an installed header;
+    # it is needed to switch on its linear-filter output
+    target_include_directories(mdsp PRIVATE ${APM_SRC}/webrtc)
+    target_compile_definitions(mdsp PRIVATE WEBRTC_APM_DEBUG_DUMP=0)  # as the library is built
 endif()
 
 add_library(mpipeline STATIC src/pipeline/segmenter.cpp src/pipeline/pipeline.cpp)
@@ -168,3 +172,11 @@ target_link_libraries(asr-cli PRIVATE masr)
 
 add_executable(pipeline-cli tools/pipeline_cli.cpp)
 target_link_libraries(pipeline-cli PRIVATE mpipeline)
+
+# R2-0 echo-cancellation experiments
+add_executable(aec-offline tools/aec_offline.cpp)
+target_link_libraries(aec-offline PRIVATE mdsp mcommon)
+
+add_executable(aec-rec tools/aec_rec.cpp)
+target_include_directories(aec-rec PRIVATE third_party)
+target_link_libraries(aec-rec PRIVATE mcommon)

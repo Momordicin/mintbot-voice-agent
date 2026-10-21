@@ -9,7 +9,9 @@ Python with tools/requirements-release.txt):
         [--source ROLE=DIR ...]   (original model files already on disk, still hash-checked)
 
 Writes dist/<version>/ (see tools/package_release.py) plus SHA256SUMS.txt, and
-dist/RELEASE_NOTES.md. Nothing from models/ or any local recording is used.
+dist/RELEASE_NOTES.md: release-notes/v<version>.md (what changed, written by hand;
+required with --tag) followed by the versions, install lines and checksums.
+Nothing from models/ or any local recording is used.
 """
 import argparse
 import glob
@@ -102,6 +104,11 @@ def main():
     version, api = project_version()
     if args.tag and args.tag != f"v{version}":
         sys.exit(f"tag {args.tag} does not match CMakeLists.txt version {version}")
+    # checked before the long build: a release is never published without them
+    changes_path = os.path.join(ROOT, "release-notes", f"v{version}.md")
+    changes = open(changes_path, encoding="utf-8").read().strip() if os.path.exists(changes_path) else ""
+    if args.tag and not changes:
+        sys.exit(f"{changes_path} is missing or empty: write what changed in v{version}")
     out = os.path.abspath(args.out)
     lock = json.load(open(os.path.join(ROOT, "tools", "models.lock.json"), encoding="utf-8"))
 
@@ -145,7 +152,7 @@ def main():
     client_tgz = next(n for n in files if n.endswith(".tgz"))
     repo = os.environ.get("GITHUB_REPOSITORY", "<owner>/<repo>")
     base = f"https://github.com/{repo}/releases/download/v{version}"
-    notes = f"""mintbot-voice-agent {version} (API {api}), models {manifest['packages']['models']['version']}, client {client_tgz[len('mintbot-voice-agent-client-'):-4]}
+    notes = (changes + "\n\n" if changes else "") + f"""mintbot-voice-agent {version} (API {api}), models {manifest['packages']['models']['version']}, client {client_tgz[len('mintbot-voice-agent-client-'):-4]}
 
 Windows x64. Models rebuilt from the official ModelScope weights and verified byte-identical
 to the validated ones (tools/models.lock.json).

@@ -22,17 +22,30 @@ std::vector<CaptureDevice> list_capture_devices(std::string* error = nullptr);
 // settings block the microphone; ms-settings:privacy-microphone) or "capture_failed".
 const char* capture_error_code(const std::string& error);
 
+// Which device a source is actually capturing from. Windows (WASAPI) only; the
+// fields are empty where nothing is known (WAV replay, a failed query).
+struct DeviceIdentity {
+    std::string name;          // endpoint name, e.g. "耳机 (AirPods Pro)"; for WAV replay "wav:<path>"
+    std::string device_id;     // endpoint ID; changes when the driver is updated or the device reinstalled
+    std::string container_id;  // physical device, e.g. "{AC00D6F5-...}": shared by all endpoints of one
+                               // headset (playback, and capture over each Bluetooth profile)
+    std::string display_name;  // the physical device's name ("Timekeeper的AirPods Pro"), or the
+                               // endpoint name for devices built into the computer
+};
+
 class AudioSource {
 public:
     using PcmFn = std::function<void(const float* pcm, size_t n)>;
-    // state: "started", "stopped", "rerouted", "interrupted", "resumed", "ended", "error"
-    using StateFn = std::function<void(const std::string& state, const std::string& detail)>;
+    // state: "started", "stopped", "rerouted", "interrupted", "resumed", "ended", "error";
+    // `device` is the device at that moment (after a reroute: the new one)
+    using StateFn = std::function<void(const std::string& state, const DeviceIdentity& device)>;
 
     virtual ~AudioSource() = default;
     // Callbacks run on the source's own thread; they must not call stop().
     virtual bool start(PcmFn on_pcm, StateFn on_state, std::string* error) = 0;
     virtual void stop() = 0;
     virtual std::string name() const = 0;
+    virtual DeviceIdentity identity() const = 0;  // current device; any thread
 };
 
 // device_index: index from list_capture_devices(), or -1 for the system default

@@ -50,7 +50,8 @@ struct Agent::Impl {
     // audio source; start/stop/restart under src_m
     std::mutex src_m;
     std::unique_ptr<AudioSource> src;
-    std::string src_name;
+    std::mutex dev_m;     // the source's current device; also set from source threads
+    DeviceIdentity src_dev;
     int device = -1;
     std::atomic<uint64_t> gen{0};  // callbacks from older sources are ignored
     std::atomic<bool> listening{false};
@@ -176,8 +177,22 @@ struct Agent::Impl {
         q_cv.notify_one();
     }
 
-    void on_state(uint64_t g, const std::string& state, const std::string& detail) {
-        hub.publish("device", JsonObject().str("state", state).str("name", detail).dump());
+    static std::string device_event(const std::string& state, const DeviceIdentity& d) {
+        return JsonObject()
+            .str("state", state)
+            .str("name", d.name)
+            .str("device_id", d.device_id)
+            .str("container_id", d.container_id)
+            .str("display_name", d.display_name)
+            .dump();
+    }
+
+    void on_state(uint64_t g, const std::string& state, const DeviceIdentity& d) {
+        if (g == gen.load()) {
+            std::lock_guard<std::mutex> lk(dev_m);
+            src_dev = d;
+        }
+        hub.publish("device", device_event(state, d));
         if (g != gen.load() || !listening) return;
         if (state == "stopped" || state == "error") {
             need_restart = true;
@@ -198,9 +213,12 @@ struct Agent::Impl {
         if (opts.source.rfind("wav:", 0) == 0) s = make_wav_source(opts.source.substr(4), opts.replay_speed);
         else s = make_capture_source(device);
         bool ok = s->start([this, g](const float* p, size_t n) { on_pcm(g, p, n); },
-                           [this, g](const std::string& st, const std::string& d) { on_state(g, st, d); }, error);
+                           [this, g](const std::string& st, const DeviceIdentity& d) { on_state(g, st, d); }, error);
         if (!ok) return false;
-        src_name = s->name();
+        {
+            std::lock_guard<std::mutex> lk(dev_m);
+            src_dev = s->identity();
+        }
         src = std::move(s);
         last_audio_ms = steady_ms();
         return true;
@@ -252,7 +270,12 @@ struct Agent::Impl {
         int64_t now = steady_ms();
         if (!need_restart && now - last_audio_ms > opts.watchdog_ms) {
             need_restart = true;
-            hub.publish("device", JsonObject().str("state", "stalled").str("name", src_name).dump());
+            DeviceIdentity d;
+            {
+                std::lock_guard<std::mutex> lk(dev_m);
+                d = src_dev;
+            }
+            hub.publish("device", device_event("stalled", d));
         }
         if (!need_restart || now < next_restart_ms) return;
         std::lock_guard<std::mutex> lk(src_m);
@@ -581,11 +604,14 @@ void Agent::stop_listening() {
 
 std::string Agent::status_json() {
     Impl& m = *p_;
-    std::string name;
+    DeviceIdentity dev;
     int device;
     {
         std::lock_guard<std::mutex> lk(m.src_m);
-        name = m.src ? m.src_name : "";
+        if (m.src) {
+            std::lock_guard<std::mutex> dl(m.dev_m);
+            dev = m.src_dev;
+        }
         device = m.device;
     }
     size_t aq;
@@ -606,8 +632,11 @@ std::string Agent::status_json() {
         .str("capture_error_code", cap_code)
         .str("capture_error", cap_msg)
         .str("source", m.opts.source)
-        .str("device_name", name)
+        .str("device_name", dev.name)
         .num("device_index", (int64_t)device)
+        .str("device_id", dev.device_id)
+        .str("container_id", dev.container_id)
+        .str("display_name", dev.display_name)
         .boolean("in_speech", m.in_speech)
         .num("stream_ms", m.stream_samples / 16)
         .num("dropped_ms", m.dropped_samples / 16)

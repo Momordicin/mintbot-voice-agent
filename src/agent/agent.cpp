@@ -187,11 +187,22 @@ struct Agent::Impl {
             .dump();
     }
 
-    void on_state(uint64_t g, const std::string& state, const DeviceIdentity& d) {
-        if (g == gen.load()) {
+    // The current device; the speaker gate hears of it only when its name changes.
+    void set_device(const DeviceIdentity& d) {
+        {
             std::lock_guard<std::mutex> lk(dev_m);
             src_dev = d;
         }
+        if (gate && !gate->set_device(d.display_name))
+            hub.publish("enroll_failed", JsonObject()
+                                             .str("code", "device_changed")
+                                             .str("message", "enrollment stopped: the microphone changed")
+                                             .str("display_name", d.display_name)
+                                             .dump());
+    }
+
+    void on_state(uint64_t g, const std::string& state, const DeviceIdentity& d) {
+        if (g == gen.load()) set_device(d);
         hub.publish("device", device_event(state, d));
         if (g != gen.load() || !listening) return;
         if (state == "stopped" || state == "error") {
@@ -215,10 +226,7 @@ struct Agent::Impl {
         bool ok = s->start([this, g](const float* p, size_t n) { on_pcm(g, p, n); },
                            [this, g](const std::string& st, const DeviceIdentity& d) { on_state(g, st, d); }, error);
         if (!ok) return false;
-        {
-            std::lock_guard<std::mutex> lk(dev_m);
-            src_dev = s->identity();
-        }
+        set_device(s->identity());
         src = std::move(s);
         last_audio_ms = steady_ms();
         return true;
@@ -491,6 +499,7 @@ struct Agent::Impl {
             auto speaker = [&](JsonObject& o) -> JsonObject& {
                 return o.boolean("speaker_enrolled", sd.enrolled)
                     .num("speaker_score", (double)sd.score)
+                    .num("speaker_threshold", (double)sd.threshold)
                     .boolean("is_owner", sd.is_owner)
                     .boolean("speaker_uncertain", sd.uncertain)
                     .num("speaker_ms", sd.embed_ms)

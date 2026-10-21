@@ -3,6 +3,7 @@
 #include "agent/json.h"
 #include "common/utf8.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -77,8 +78,11 @@ bool SpeakerGate::load(const std::string& gguf, const SpeakerGateOptions& opts, 
     }
     find_number(s, "utterances", utts);
     find_number(s, "speech_ms", ms);
+    std::string device;
+    find_string(s, "device", device);
     std::lock_guard<std::mutex> lk(m_);
     center_ = std::move(c);
+    center_device_ = device;
     center_utterances_ = (int)utts;
     center_ms_ = (int64_t)ms;
     return true;
@@ -104,11 +108,14 @@ SpeakerDecision SpeakerGate::analyze(const float* pcm, size_t n, const WindowCac
     const int64_t ms = (int64_t)n / 16;
     std::vector<float> center;
     bool enrolling;
+    float threshold, floor;
     {
         std::lock_guard<std::mutex> lk(m_);
         center = center_;
         enrolling = enrolling_;
+        limits_locked(threshold, floor);
     }
+    d.threshold = threshold;
     d.enrolled = !center.empty();
     d.uncertain = ms < opts_.min_reliable_ms;
     if (!d.enrolled && !enrolling) return d;
@@ -131,11 +138,33 @@ SpeakerDecision SpeakerGate::analyze(const float* pcm, size_t n, const WindowCac
     }
     if (d.enrolled) {
         d.score = cosine(average_normalized(windows), center);
-        d.is_owner = d.score >= opts_.threshold;
-        d.transcribe = d.is_owner || (d.uncertain && !opts_.gate_uncertain && d.score >= opts_.uncertain_floor);
+        d.is_owner = d.score >= threshold;
+        d.transcribe = d.is_owner || (d.uncertain && !opts_.gate_uncertain && d.score >= floor);
     }
     if (d.enrolling) d.transcribe = true;
     return d;
+}
+
+void SpeakerGate::limits_locked(float& threshold, float& floor) const {
+    threshold = opts_.threshold;
+    floor = opts_.uncertain_floor;
+    // unknown on either side (a source without a device, a voiceprint without one): as the same device
+    if (device_.empty() || center_device_.empty() || device_ == center_device_) return;
+    threshold = std::max(opts_.threshold * 0.5f, std::min(0.2f, opts_.threshold));
+    floor = (opts_.uncertain_floor + threshold) / 2;
+}
+
+bool SpeakerGate::set_device(const std::string& name) {
+    std::lock_guard<std::mutex> lk(m_);
+    if (name == device_) return true;
+    device_ = name;
+    if (!enrolling_ || name == enroll_device_) return true;
+    enrolling_ = false;
+    enroll_device_changed_ = true;
+    enroll_windows_.clear();
+    enroll_utts_ = 0;
+    enroll_ms_ = 0;
+    return false;
 }
 
 EnrollState SpeakerGate::enroll_begin() {
@@ -145,6 +174,8 @@ EnrollState SpeakerGate::enroll_begin() {
         enroll_windows_.clear();
         enroll_utts_ = 0;
         enroll_ms_ = 0;
+        enroll_device_ = device_;
+        enroll_device_changed_ = false;
     }
     return enroll_state();
 }
@@ -161,7 +192,10 @@ EnrollState SpeakerGate::enroll_state() {
 
 bool SpeakerGate::enroll_commit(std::string* error) {
     std::lock_guard<std::mutex> lk(m_);
-    if (!enrolling_) { if (error) *error = "no enrollment in progress"; return false; }
+    if (!enrolling_) {
+        if (error) *error = enroll_device_changed_ ? "enrollment stopped: the microphone changed" : "no enrollment in progress";
+        return false;
+    }
     if (enroll_utts_ < opts_.min_enroll_utterances || enroll_ms_ < opts_.min_enroll_ms) {
         if (error)
             *error = "need at least " + std::to_string(opts_.min_enroll_utterances) + " utterances and " +
@@ -172,13 +206,16 @@ bool SpeakerGate::enroll_commit(std::string* error) {
     auto old_center = center_;
     int old_u = center_utterances_;
     int64_t old_ms = center_ms_;
+    std::string old_device = center_device_;
     center_ = average_normalized(enroll_windows_);
     center_utterances_ = enroll_utts_;
     center_ms_ = enroll_ms_;
+    center_device_ = enroll_device_;
     if (!save_locked(error)) {
         center_ = std::move(old_center);
         center_utterances_ = old_u;
         center_ms_ = old_ms;
+        center_device_ = std::move(old_device);
         return false;
     }
     enrolling_ = false;
@@ -213,6 +250,7 @@ bool SpeakerGate::forget(std::string* error) {
     center_.clear();
     center_utterances_ = 0;
     center_ms_ = 0;
+    center_device_.clear();
     ++version_;
     return true;
 }
@@ -228,6 +266,7 @@ bool SpeakerGate::save_locked(std::string* error) {
                            .num("dim", (int64_t)center_.size())
                            .num("utterances", (int64_t)center_utterances_)
                            .num("speech_ms", center_ms_)
+                           .str("device", center_device_)
                            .num("created_unix_ms", unix_ms())
                            .raw("center", arr + "]")
                            .dump();
@@ -256,14 +295,20 @@ bool SpeakerGate::save_locked(std::string* error) {
 
 std::string SpeakerGate::status_json() {
     std::lock_guard<std::mutex> lk(m_);
+    float threshold, floor;
+    limits_locked(threshold, floor);
     return agent::JsonObject()
         .boolean("enrolled", !center_.empty())
         .num("utterances", (int64_t)center_utterances_)
         .num("speech_ms", center_ms_)
+        .str("enrolled_device", center_device_)
+        .str("device", device_)
         .num("threshold", (double)opts_.threshold)
+        .num("active_threshold", (double)threshold)  // the one applied on the current device
         .num("min_reliable_ms", (int64_t)opts_.min_reliable_ms)
         .boolean("gate_uncertain", opts_.gate_uncertain)
         .num("uncertain_floor", (double)opts_.uncertain_floor)
+        .num("active_uncertain_floor", (double)floor)
         .boolean("enrolling", enrolling_)
         .num("enroll_utterances", (int64_t)enroll_utts_)
         .num("enroll_speech_ms", enroll_ms_)

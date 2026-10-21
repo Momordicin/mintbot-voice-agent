@@ -31,6 +31,7 @@ struct SpeakerGateOptions {
 struct SpeakerDecision {
     bool enrolled = false;   // no voiceprint -> gate open
     float score = 0.0f;      // cosine to the owner centre
+    float threshold = 0.0f;  // the threshold applied (lowered on a device other than the enrollment's)
     bool uncertain = false;  // too short to judge reliably
     bool is_owner = true;    // score >= threshold (always true when not enrolled)
     bool transcribe = true;  // what the agent should do with the utterance
@@ -65,6 +66,14 @@ public:
     bool embed_window(const float* pcm, std::vector<float>& emb) { return cam_.embed_window(pcm, kSvWindow, emb); }
     void set_abort_callback(ggml_abort_callback cb, void* data) { cam_.set_abort_callback(cb, data); }
 
+    // The capture device's name (DeviceIdentity::display_name), set when capture
+    // starts and when the device changes; empty for sources without a device. On
+    // a device other than the one the voiceprint was enrolled on, the threshold is
+    // halved (not below 0.2) and the short-utterance floor is the mean of the
+    // usual floor and that threshold. Returns false if this stopped a running
+    // enrollment: an enrollment must come from one device.
+    bool set_device(const std::string& name);
+
     EnrollState enroll_begin();
     EnrollState enroll_state();
     bool enroll_commit(std::string* error);
@@ -75,6 +84,8 @@ public:
 
 private:
     bool save_locked(std::string* error);
+    // the threshold and short-utterance floor for the current device
+    void limits_locked(float& threshold, float& floor) const;
 
     CamPlus cam_;
     SpeakerGateOptions opts_;
@@ -82,11 +93,15 @@ private:
     std::vector<float> center_;  // empty = not enrolled
     int center_utterances_ = 0;
     int64_t center_ms_ = 0;
+    std::string center_device_;  // device the voiceprint was enrolled on; empty: unknown
+    std::string device_;         // current capture device
     bool enrolling_ = false;
     uint64_t version_ = 0;
     std::vector<std::vector<float>> enroll_windows_;
     int enroll_utts_ = 0;
     int64_t enroll_ms_ = 0;
+    std::string enroll_device_;
+    bool enroll_device_changed_ = false;  // the last enrollment was stopped by a device change
 };
 
 }  // namespace mintbot::spk

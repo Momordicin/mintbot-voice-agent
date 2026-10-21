@@ -12,7 +12,7 @@
 //   POST /v1/speaker/enroll/{start,commit,cancel}   enrollment from the next utterances
 //   DELETE /v1/speaker                    forget the voiceprint (deletes the file)
 //   GET  /v1/events                       SSE: status, speech_start, speech_end, final, speech_other,
-//                                         enroll_progress, speaker, device, error
+//                                         enroll_progress, enroll_failed, speaker, device, error
 // Every endpoint but /v1/health needs "Authorization: Bearer $MINTBOT_VOICE_TOKEN".
 // The process exits when stdin reaches EOF (the parent went away), on
 // /v1/shutdown, or on Ctrl+C. Logs go to stderr; stdout carries only the ready line.

@@ -15,6 +15,9 @@ export { API_VERSION, AgentHttpError } from "./protocol.ts";
 export type {
   AgentEvent,
   CaptureErrorCode,
+  DeviceEvent,
+  DeviceIdentity,
+  EnrollFailedEvent,
   EnrollProgressEvent,
   FinalEvent,
   ReadyLine,

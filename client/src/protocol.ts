@@ -7,7 +7,7 @@ export const API_VERSION = 1;
 export interface AgentEvent {
   id: number;
   // status | speech_start | speech_end | final | speech_other | device | capture | error |
-  // enroll_progress | speaker, plus "snapshot" from the supervisor (see VoiceAgentSupervisor)
+  // enroll_progress | enroll_failed | speaker, plus "snapshot" from the supervisor (see VoiceAgentSupervisor)
   type: string;
   data: any;
 }
@@ -24,6 +24,9 @@ export interface ReadyLine {
 export interface SpeakerFields {
   speaker_enrolled?: boolean; // a voiceprint exists; false = everything is transcribed
   speaker_score?: number; // cosine to the owner voiceprint (0 when not enrolled)
+  speaker_threshold?: number; // the threshold applied to this utterance (agent >= 0.2.0)
+  speaker_same_device?: boolean; // captured on the enrollment's microphone (agent >= 0.2.1)
+  speaker_transcribe?: boolean; // the gate's decision to transcribe (agent >= 0.2.1)
   is_owner?: boolean; // speaker_score >= threshold (true when not enrolled)
   speaker_uncertain?: boolean; // shorter than --speaker-min-ms
   speaker_ms?: number; // time spent scoring when the utterance ended
@@ -71,6 +74,27 @@ export interface EnrollProgressEvent {
   ready: boolean; // enough material for POST /v1/speaker/enroll/commit
 }
 
+// `enroll_failed` event: the running enrollment was stopped (agent >= 0.2.0).
+export interface EnrollFailedEvent {
+  code: "device_changed"; // the microphone changed during the enrollment
+  message: string;
+  display_name: string; // the new microphone
+}
+
+// The capture device, on `device` events and in GET /v1/status (agent >= 0.2.0);
+// empty strings when unknown.
+export interface DeviceIdentity {
+  device_id: string; // Windows endpoint ID
+  container_id: string; // physical device, shared by all endpoints of one headset
+  display_name: string; // name to show, e.g. the headset's name
+}
+
+// `device` event.
+export interface DeviceEvent extends DeviceIdentity {
+  state: string; // started | stopped | rerouted | interrupted | resumed | stalled | ended
+  name: string; // endpoint name
+}
+
 // GET /v1/speaker, the answers of enroll/commit, enroll/cancel and DELETE /v1/speaker,
 // and the `speaker` event (after commit or forget). 404 without --spk-model.
 export interface SpeakerStatus {
@@ -81,6 +105,17 @@ export interface SpeakerStatus {
   min_reliable_ms: number;
   gate_uncertain: boolean;
   uncertain_floor: number;
+  // agent >= 0.2.0
+  enrolled_device?: string; // microphone the voiceprint was enrolled on; "" if unknown
+  device?: string; // current microphone
+  active_threshold?: number; // on another microphone: the value for a 1 s utterance
+  active_uncertain_floor?: number;
+  // agent >= 0.2.1: on another microphone the threshold is cross_base + cross_per_ln_s * ln(seconds),
+  // not below cross_min
+  same_device?: boolean;
+  cross_base?: number;
+  cross_per_ln_s?: number;
+  cross_min?: number;
   enrolling: boolean;
   enroll_utterances: number; // collected by the running enrollment
   enroll_speech_ms: number;

@@ -1,22 +1,9 @@
 #!/usr/bin/env python3
-"""End-to-end latency through the agent: replays WAV files in real time and
-breaks every utterance's delay down from the agent's own event fields.
-
-  detect_lag  audio between the end of speech and the VAD closing the segment
-  queue       wait for the ASR thread
-  speaker     CAM++ scoring (speaker_ms)
-  asr         SenseVoice (asr_ms)
-  total       detect_lag + latency_ms: end of speech -> event published
-
-Capture-device buffering (one 10 ms period) and SSE delivery are not included.
+"""End-to-end latency through the agent: replays WAV files in real time and breaks each utterance's delay down from the agent's events.
 
     python tests/bench_latency.py --exe build/bin/mintbot-voice-agent.exe --vad models/fsmn-vad.gguf \
         --asr models/sensevoice-small-q8_0.gguf --spk models/campplus-zh-cn.gguf \
         --voiceprint rec/owner.voiceprint.json --out bench-base.json rec/owner-1.wav rec/other-1.wav
-
---compare bench-base.json reports utterances whose boundaries, decision,
-speaker score or text differ from an earlier run, so an optimisation can be checked for
-identical output. --agent-arg passes extra flags (repeatable).
 """
 import argparse
 import json
@@ -126,7 +113,7 @@ def run_file(args, wav, db, cpu, busy):
         dur = wav_seconds(wav) / args.speed
         if not a.wait_for(lambda e: e["type"] == "device" and e["data"].get("state") == "ended", dur + 30):
             sys.exit("replay did not end: " + wav)
-        deadline = time.time() + 60  # let the ASR thread drain
+        deadline = time.time() + 60
         while time.time() < deadline:
             _, st = a.call("GET", "/v1/status")
             if st.get("asr_queue", 0) == 0 and st.get("capture") == "stopped":
@@ -135,7 +122,7 @@ def run_file(args, wav, db, cpu, busy):
                 if st2.get("asr_queue", 0) == 0:
                     break
             time.sleep(0.2)
-        if cpu0 is not None:  # listening -> drained, model loading excluded
+        if cpu0 is not None:
             cpu[os.path.basename(wav)] = cpu_seconds(a.p.pid) - cpu0
             print(f"  agent CPU {cpu[os.path.basename(wav)]:.1f} s for {dur:.0f} s of audio", flush=True)
         _, st = a.call("GET", "/v1/status")

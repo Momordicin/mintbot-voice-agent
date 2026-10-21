@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Acceptance A: FsmnVadStream must not depend on how the audio is chunked.
-
-Feeds each wav through vad-stream-cli at several chunk sizes and compares the
-per-frame silence probabilities and the segments with a single-chunk run.
+"""Checks that FsmnVadStream gives the same output however the audio is chunked.
 
     python tests/check_vad_chunking.py --cli build/bin/vad-stream-cli.exe \
         --model models/fsmn-vad.gguf a.wav b.wav ...

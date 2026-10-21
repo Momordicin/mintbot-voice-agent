@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""M5 end-to-end: enrollment, persistence and gating through the agent's HTTP API.
-
-  run 1: replay --enroll-wav, POST enroll/start before listening, commit after the
-         replay ends (commit before enough speech must give 409); the voiceprint
-         file must exist afterwards.
-  run 2: a new process with the same --speaker-db replays --test-wav; prints every
-         final / speech_other event so the decisions can be checked against
-         --expect (comma list of 'owner' / 'other' per utterance, in order).
-  run 3: DELETE /v1/speaker removes the file.
+"""End-to-end check of enrollment, voiceprint persistence and gating through the agent's HTTP API.
 
     python tests/check_speaker_flow.py --exe build/bin/mintbot-voice-agent.exe --vad models/fsmn-vad.gguf \
         --asr models/sensevoice-small-q8_0.gguf --spk models/campplus-zh-cn.gguf \

@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Acceptance B: compare vad-stream-cli with FunASR's own streaming fsmn-vad.
-
-Runs FunASR (PyTorch, test-only dependency) in streaming mode with the same
-settings as the C++ default (chunk 200 ms, max_end_silence_time 800 ms,
-max_single_segment_time 30000 ms), captures the encoder's per-frame output,
-and compares segments and silence probabilities with the C++ port.
+"""Compares vad-stream-cli with FunASR's own streaming fsmn-vad.
 
     python tests/funasr_reference_vad.py --cli build/bin/vad-stream-cli.exe \
         --model models/fsmn-vad.gguf --funasr-model <fsmn-vad model dir> a.wav ...

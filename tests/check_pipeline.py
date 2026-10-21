@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Acceptance for M2: pipeline-cli (10 ms frames) against independent references.
-
-For each wav:
-  * utterance boundaries must equal vad-stream-cli's segments;
-  * each utterance's text must equal what a reference SenseVoice CLI (the
-    SenseVoice repository's llama-funasr-sensevoice) prints for the same audio;
-  * optionally (--meta / --refs) a per-clip CER against whole-clip transcripts.
+"""Checks pipeline-cli against independent references: VAD segments, a reference SenseVoice CLI and, optionally, CER.
 
     python tests/check_pipeline.py --pipeline build/bin/pipeline-cli.exe --vad-cli build/bin/vad-stream-cli.exe \
         --vad models/fsmn-vad.gguf --asr models/sensevoice-small-q8_0.gguf \
@@ -67,8 +61,6 @@ def main():
             mismatches = []
             for u in utts:
                 seg = os.path.join(tmp, "seg.wav")
-                # float WAV holding exactly int16 / 32768: the reference CLI decodes it with miniaudio
-                # without the extra int16 -> float conversion, so both sides see identical samples
                 sf.write(seg, y[u["start_ms"] * 16:u["end_ms"] * 16] / 32768.0, 16000, subtype="FLOAT")
                 ref = subprocess.run([args.ref_cli, "-m", args.asr, "-a", seg], capture_output=True).stdout.decode("utf-8").strip()
                 if ref != u["text"]:

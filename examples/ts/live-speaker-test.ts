@@ -1,15 +1,10 @@
-// Live test of the owner-speaker gate on the real microphone, recording every
-// session so it doubles as calibration data.
+// Live test of the owner-speaker gate on the real microphone: enrollment and labelled
+// sessions, each recorded with its events so it doubles as calibration data.
 //
 //   node --experimental-strip-types examples/ts/live-speaker-test.ts --exe build/bin/mintbot-voice-agent.exe \
 //        --vad models/fsmn-vad.gguf --model models/sensevoice-small-q8_0.gguf --spk models/campplus-zh-cn.gguf \
-//        --db rec/owner.voiceprint.json --out rec [--threshold 0.5] [--device N] [--enroll-utterances 5]
-//
-// Sessions are recorded to <out>/<kind>-<n>.wav with the events in <kind>-<n>.events.jsonl:
-//   owner : only you speak            -> owner side of the calibration
-//   other : only background sound    -> other side (games, videos, TV, other people)
-//   free  : anything, not used for calibration
-// Run `chcp 65001` first if Chinese text shows up garbled in the console.
+//        --db rec/owner.voiceprint.json --out rec [--threshold 0.5] [--device N] [--enroll-utterances 5] \
+//        [--cross-device N]
 import { existsSync, mkdirSync, readdirSync, appendFileSync } from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline/promises";
@@ -23,8 +18,8 @@ const exe = arg("--exe")!, vad = arg("--vad")!, model = arg("--model")!, spk = a
 const db = arg("--db")!, out = arg("--out")!;
 const threshold = arg("--threshold", "0.5")!;
 const device = arg("--device");
+const crossDevice = arg("--cross-device", device);
 const enrollUtterances = Number(arg("--enroll-utterances", "5"));
-// testing aid: replay a wav instead of the microphone
 const source = arg("--source");
 const replaySpeed = arg("--replay-speed", "1")!;
 const sourceArgs = source ? ["--source", source, "--replay-speed", replaySpeed] : [];
@@ -40,11 +35,12 @@ function nextFile(kind: string) {
   return path.join(out, `${kind}-${used + 1}`);
 }
 
-async function session(kind: string, onEvent: (ev: any, agent: VoiceAgent) => Promise<boolean | void>) {
+async function session(kind: string, onEvent: (ev: any, agent: VoiceAgent) => Promise<boolean | void>, extra: string[] = []) {
   const base = nextFile(kind);
   const agent = await startVoiceAgent({
     exe, vad, model,
-    args: ["--spk-model", spk, "--speaker-db", db, "--speaker-threshold", threshold, "--record", base + ".wav", ...sourceArgs],
+    args: ["--spk-model", spk, "--speaker-db", db, "--speaker-threshold", threshold, "--record", base + ".wav",
+           ...sourceArgs, ...extra],
   });
   const abort = new AbortController();
   let finished = false;
@@ -93,16 +89,29 @@ async function enroll() {
   await s.agent.shutdown();
 }
 
+function crossLine(ev: any) {
+  const d = ev.data;
+  const label = d.speaker_transcribe ? "主人  " : "其他人";
+  const len = ((d.end_ms - d.start_ms) / 1000).toFixed(2) + "s";
+  return `  [${label}] 分数 ${d.speaker_score.toFixed(3)}  阈值 ${d.speaker_threshold.toFixed(3)}  长度 ${len}  ${d.text}`;
+}
+
 async function testSession(kind: string) {
   const hint: Record<string, string> = {
     owner: "只有你说话：正常聊天、短指令（1–2 秒）、长句都来一些",
     other: "你不要说话：放游戏 / 视频 / 电视，或让别人说话",
     free: "随便测试（这一场不用于校准）",
+    cross: "非原生设备上随便测试：每句都转写，并显示判定、分数、阈值和长度",
   };
+  const cross = kind === "cross";
   console.log(`\n== ${kind} 场次：${hint[kind]}。按回车结束这一场。`);
   const stats = { owner: 0, other: 0, scores: [] as number[] };
   const s = await session(kind, async (ev) => {
-    if (ev.type === "final" || ev.type === "speech_other") {
+    if (cross && ev.type === "final") {
+      console.log(crossLine(ev));
+      stats.scores.push(ev.data.speaker_score);
+      ev.data.speaker_transcribe ? stats.owner++ : stats.other++;
+    } else if (ev.type === "final" || ev.type === "speech_other") {
       console.log(line(ev));
       if (typeof ev.data.speaker_score === "number") stats.scores.push(ev.data.speaker_score);
       ev.type === "final" && ev.data.is_owner ? stats.owner++ : stats.other++;
@@ -111,11 +120,20 @@ async function testSession(kind: string) {
     } else if (ev.type === "error") {
       console.log(`  (错误：${ev.data.message})`);
     }
-  });
-  await s.agent.call("POST", "/v1/listen/start" + (device ? `?device=${device}` : ""));
+  }, cross ? ["--speaker-observe"] : []);
+  const dev = cross ? crossDevice : device;
+  await s.agent.call("POST", "/v1/listen/start" + (dev ? `?device=${dev}` : ""));
+  if (cross) {
+    await new Promise((r) => setTimeout(r, 500));
+    const sp = (await s.agent.call("GET", "/v1/status")).speaker;
+    if (!sp?.enrolled) console.log("  (注意：还没有声纹)");
+    else if (!sp.enrolled_device) console.log("  (注意：这份声纹没有记录录入设备，判定按原生设备处理；请先 r 重新录入)");
+    else if (sp.same_device) console.log(`  (注意：当前就是录入设备 ${sp.device}，不是非原生设备；用 --cross-device 选别的麦克风)`);
+    else console.log(`  录入设备：${sp.enrolled_device}；当前设备：${sp.device}`);
+  }
   await rl.question("");
   await s.agent.call("POST", "/v1/listen/stop");
-  await new Promise((r) => setTimeout(r, 1500));  // let the last utterance finish
+  await new Promise((r) => setTimeout(r, 1500));
   s.abort.abort();
   await s.agent.shutdown();
   const sc = stats.scores.sort((a, b) => a - b);
@@ -127,10 +145,11 @@ async function testSession(kind: string) {
 async function main() {
   if (!existsSync(db) || (await rl.question(`已有声纹 ${db}，重新录入吗？(y/N) `)).trim().toLowerCase() === "y") await enroll();
   for (;;) {
-    const c = (await rl.question("\n选择场次：1 主人  2 环境声音  3 自由测试  r 重新录入  q 退出 > ")).trim().toLowerCase();
+    const c = (await rl.question("\n选择场次：1 主人  2 环境声音  3 自由测试  4 自由检测（非原生设备）  r 重新录入  q 退出 > ")).trim().toLowerCase();
     if (c === "1") await testSession("owner");
     else if (c === "2") await testSession("other");
     else if (c === "3") await testSession("free");
+    else if (c === "4") await testSession("cross");
     else if (c === "r") await enroll();
     else if (c === "q") break;
   }

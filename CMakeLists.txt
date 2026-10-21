@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 # VERSION: release version of the binaries (manifest, ready line, /v1/health).
 # MINTBOT_API_VERSION: bump only on incompatible changes to the REST / SSE API.
-project(mintbot-voice-agent VERSION 0.2.0 LANGUAGES C CXX)
+project(mintbot-voice-agent VERSION 0.2.1 LANGUAGES C CXX)
 set(MINTBOT_API_VERSION 1)
 
 set(CMAKE_CXX_STANDARD 17)

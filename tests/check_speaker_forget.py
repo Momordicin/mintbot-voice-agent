@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""The voiceprint file when it cannot be deleted or replaced (Windows: another process
-holds it open without delete sharing, as Python's open() does).
-
-  forget: DELETE /v1/speaker fails and nothing changes (still enrolled, gate still
-          closed, file still there), so the agent never says "not enrolled" while
-          the biometric file survives; once free, DELETE removes the file and a
-          leftover owner.voiceprint.json.tmp. Error texts are valid UTF-8 JSON.
-  save:   (with --enroll-wav) enroll/commit fails while the file is held: no .tmp is
-          left behind, the old file and the old voiceprint stay; once free, commit
-          succeeds.
+"""Checks how the voiceprint file is handled when it cannot be deleted or replaced (Windows: held open by another process).
 
     python tests/check_speaker_forget.py --exe build-p/bin/mintbot-voice-agent.exe --vad models/fsmn-vad.gguf \
         --asr models/sensevoice-small-q8_0.gguf --spk models/campplus-zh-cn.gguf --voiceprint owner.voiceprint.json \
@@ -53,7 +44,7 @@ class Agent:
             code, raw = e.code, e.read()
         try:
             return code, json.loads(raw.decode("utf-8"))
-        except UnicodeDecodeError:  # error texts must reach the client as UTF-8 JSON
+        except UnicodeDecodeError:
             bad_bodies.append(raw)
             return code, json.loads(raw.decode("utf-8", errors="replace"))
 
@@ -133,7 +124,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="forget-")
     db = os.path.join(tmp, "owner.voiceprint.json")
     try:
-        shutil.copyfile(args.voiceprint, db)  # the original is never touched
+        shutil.copyfile(args.voiceprint, db)
         check_forget(args, db)
         if args.enroll_wav:
             check_save(args, db, args.voiceprint)

@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""M5: compare spk-cli (CAM++ on ggml) with FunASR's PyTorch CAM++.
-
-Both sides embed the same sv_chunk windows (1.5 s / 0.75 s, short ones
-zero-padded). Pass: cosine(ggml, torch) >= --min-cos for every window.
+"""Compares spk-cli (CAM++ on ggml) with FunASR's PyTorch CAM++, window by window.
 
     python tests/campplus_reference.py --cli build/bin/spk-cli.exe --model models/campplus-zh-cn.gguf \
         --funasr-model <speech_campplus_sv_zh-cn_16k-common dir> a.wav b.wav ...

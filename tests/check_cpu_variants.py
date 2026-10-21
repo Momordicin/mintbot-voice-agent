@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Portable build: every ggml-cpu-<variant>.dll must give the same results.
-
-For each variant DLL in --bin (forced with MINTBOT_GGML_CPU_LIB), and for the
-automatic choice, compares against a reference build (--ref-bin, e.g. the
-native developer build):
-  * vad-stream-cli segments           -> must be identical
-  * pipeline-cli texts                -> reported (kernels differ per ISA level)
-  * spk-cli embeddings                -> cosine vs reference
-Variants the CPU cannot run must be refused, not crash.
+"""Checks that every ggml-cpu variant DLL of the portable build gives the same results as a reference build.
 
     python tests/check_cpu_variants.py --bin build-p/bin --ref-bin build/bin --models models a.wav b.wav
 """

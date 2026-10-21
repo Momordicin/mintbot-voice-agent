@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,7 +22,6 @@ int64_t unix_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-// Minimal reader for the file save_locked() writes.
 bool find_number(const std::string& s, const char* key, double& out) {
     std::string k = std::string("\"") + key + "\"";
     size_t p = s.find(k);
@@ -113,7 +113,8 @@ SpeakerDecision SpeakerGate::analyze(const float* pcm, size_t n, const WindowCac
         std::lock_guard<std::mutex> lk(m_);
         center = center_;
         enrolling = enrolling_;
-        limits_locked(threshold, floor);
+        limits_locked(ms, threshold, floor);
+        d.same_device = same_device_locked();
     }
     d.threshold = threshold;
     d.enrolled = !center.empty();
@@ -125,7 +126,7 @@ SpeakerDecision SpeakerGate::analyze(const float* pcm, size_t n, const WindowCac
     bool ok = cam_.embed_utterance(pcm, n, windows, pre, &d.reused);
     d.embed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     d.windows = (int)windows.size();
-    if (!ok) return d;  // too short to embed: let it through
+    if (!ok) return d;
 
     if (enrolling) {
         std::lock_guard<std::mutex> lk(m_);
@@ -145,13 +146,16 @@ SpeakerDecision SpeakerGate::analyze(const float* pcm, size_t n, const WindowCac
     return d;
 }
 
-void SpeakerGate::limits_locked(float& threshold, float& floor) const {
+bool SpeakerGate::same_device_locked() const {
+    return device_.empty() || center_device_.empty() || device_ == center_device_;
+}
+
+void SpeakerGate::limits_locked(int64_t ms, float& threshold, float& floor) const {
     threshold = opts_.threshold;
     floor = opts_.uncertain_floor;
-    // unknown on either side (a source without a device, a voiceprint without one): as the same device
-    if (device_.empty() || center_device_.empty() || device_ == center_device_) return;
-    threshold = std::max(opts_.threshold * 0.5f, std::min(0.2f, opts_.threshold));
-    floor = (opts_.uncertain_floor + threshold) / 2;
+    if (same_device_locked()) return;
+    const float t = opts_.cross_base + opts_.cross_per_ln_s * std::log(std::max<int64_t>(ms, 1) / 1000.0f);
+    threshold = floor = std::clamp(t, std::min(opts_.cross_min, opts_.threshold), opts_.threshold);
 }
 
 bool SpeakerGate::set_device(const std::string& name) {
@@ -234,13 +238,10 @@ void SpeakerGate::enroll_cancel() {
 
 bool SpeakerGate::forget(std::string* error) {
     std::lock_guard<std::mutex> lk(m_);
-    // Files first: if one cannot be deleted nothing changes, so the gate never reports
-    // "not enrolled" (and stops gating) while the voiceprint is still on disk. The
-    // .tmp is what a failed save may have left behind; it holds a voiceprint too.
     if (!opts_.db_path.empty()) {
         for (const std::string& f : {opts_.db_path + ".tmp", opts_.db_path}) {
             std::error_code ec;
-            std::filesystem::remove(utf8_path(f), ec);  // a missing file is not an error
+            std::filesystem::remove(utf8_path(f), ec);
             if (ec) {
                 if (error) *error = "cannot delete " + f + ": " + error_text(ec);
                 return false;
@@ -277,16 +278,16 @@ bool SpeakerGate::save_locked(std::string* error) {
         if (!f) {
             f.close();
             std::error_code ignored;
-            std::filesystem::remove(utf8_path(tmp), ignored);  // a partial voiceprint must not stay behind
+            std::filesystem::remove(utf8_path(tmp), ignored);
             if (error) *error = "cannot write " + tmp;
             return false;
         }
     }
     std::error_code ec;
-    std::filesystem::rename(utf8_path(tmp), utf8_path(opts_.db_path), ec);  // replaces the old file atomically
+    std::filesystem::rename(utf8_path(tmp), utf8_path(opts_.db_path), ec);
     if (ec) {
         std::error_code ignored;
-        std::filesystem::remove(utf8_path(tmp), ignored);  // nor the new one that could not be put in place
+        std::filesystem::remove(utf8_path(tmp), ignored);
         if (error) *error = "cannot replace " + opts_.db_path + ": " + error_text(ec);
         return false;
     }
@@ -296,15 +297,20 @@ bool SpeakerGate::save_locked(std::string* error) {
 std::string SpeakerGate::status_json() {
     std::lock_guard<std::mutex> lk(m_);
     float threshold, floor;
-    limits_locked(threshold, floor);
+    limits_locked(1000, threshold, floor);
     return agent::JsonObject()
         .boolean("enrolled", !center_.empty())
         .num("utterances", (int64_t)center_utterances_)
         .num("speech_ms", center_ms_)
         .str("enrolled_device", center_device_)
         .str("device", device_)
+        .boolean("same_device", same_device_locked())
         .num("threshold", (double)opts_.threshold)
-        .num("active_threshold", (double)threshold)  // the one applied on the current device
+        .num("active_threshold", (double)threshold)
+        .num("active_uncertain_floor", (double)floor)
+        .num("cross_base", (double)opts_.cross_base)
+        .num("cross_per_ln_s", (double)opts_.cross_per_ln_s)
+        .num("cross_min", (double)opts_.cross_min)
         .num("min_reliable_ms", (int64_t)opts_.min_reliable_ms)
         .boolean("gate_uncertain", opts_.gate_uncertain)
         .num("uncertain_floor", (double)opts_.uncertain_floor)

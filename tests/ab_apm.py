@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""M4: APM checks.
-
-1. Chunking invariance: apm-cli output must be bit-identical for any chunk size.
-2. A/B: pipeline-cli with several APM settings on wavs that have clip ground
-   truth (<wav>.json: [{"clip", "start", "end"}]) and whole-clip reference
-   transcripts (--refs). Reports CER, utterance count and noise-only segments.
-3. Noise-only wavs (--noise): number of utterances (false triggers) per setting.
+"""APM checks: apm-cli output must not depend on the chunk size, and an A/B of preprocessing settings through pipeline-cli (CER, utterances, false triggers).
 
     python tests/ab_apm.py --bin build/bin --vad models/fsmn-vad.gguf --asr models/sensevoice-small-q8_0.gguf \
         --refs refs.json --noise noise.wav a.wav b.wav

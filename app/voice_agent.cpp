@@ -107,6 +107,7 @@ void usage(const char* argv0) {
             "  --speaker-min-ms MS    shorter utterances are 'uncertain' (default 1000)\n"
             "  --speaker-short-floor X  uncertain utterances scoring below X are dropped too (default 0.3)\n"
             "  --speaker-gate-short   drop every uncertain utterance below the threshold (default: transcribe them)\n"
+            "  --speaker-observe      testing: transcribe every utterance, only report the speaker decision\n"
             "  --no-stdin-watch    do not exit when stdin closes\n"
             "  --no-auth           allow running without MINTBOT_VOICE_TOKEN (local debugging only)\n",
             argv0, argv0);
@@ -161,6 +162,7 @@ int main(int argc, char** argv) {
         }
         else if (a == "--speaker-min-ms") opts.speaker.min_reliable_ms = atoi(next());
         else if (a == "--speaker-gate-short") opts.speaker.gate_uncertain = true;
+        else if (a == "--speaker-observe") opts.speaker_observe = true;
         else if (a == "--no-stdin-watch") stdin_watch = false;
         else if (a == "--no-auth") no_auth = true;
         else if (a == "-h" || a == "--help") { usage(argv[0]); return 0; }

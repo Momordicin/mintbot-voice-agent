@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""Calibrate the owner-speaker threshold from real recordings.
-
-  --owner : recordings of the owner (ideally several sessions / days)
-  --other : recordings of anything else the microphone hears (other people,
-            games, videos, TV ...)
-  --voiceprint : optional; the agent's --speaker-db file. Scores every owner
-            utterance against the voiceprint actually in use.
-
-Each file is cut into utterances with the FSMN-VAD and embedded with CAM++
-(spk-cli --vad). Owner utterances are scored leave-one-file-out against a
-centre built from the other owner files (one owner file: first half enrolls,
-second half is scored). Prints EER, the thresholds for 1% / 0.1% false accepts
-and accuracy per utterance length.
+"""Calibrates the owner-speaker threshold from owner and other recordings: EER, thresholds for given false-accept rates, accuracy per utterance length.
 
     python tests/calibrate_speaker.py --cli build/bin/spk-cli.exe --model models/campplus-zh-cn.gguf \
         --vad models/fsmn-vad.gguf --owner me1.wav me2.wav --other room.wav game.wav
@@ -29,7 +17,7 @@ BINS = [(0, 1000), (1000, 2000), (2000, 4000), (4000, 10**9)]
 
 def utterances(args, wav):
     cmd = [args.cli, "-m", args.model, "--vad", args.vad, "-a", wav]
-    if not args.no_apm:  # --record files are raw; the agent scores audio after its default preprocessing
+    if not args.no_apm:
         cmd += ["--apm", "--ns", str(args.ns)]
     out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
     rows = [json.loads(l) for l in out.splitlines() if l.strip()]
@@ -60,7 +48,7 @@ def main():
     other = [u for f in args.other for u in utterances(args, f)]
     print(f"owner: {sum(len(v) for v in owner.values())} utterances in {len(owner)} files; other: {len(other)} utterances")
 
-    genuine, impostor = [], []  # (score, duration_ms)
+    genuine, impostor = [], []
     files = list(owner)
     if args.voiceprint:
         vp = json.load(open(args.voiceprint, encoding="utf-8"))

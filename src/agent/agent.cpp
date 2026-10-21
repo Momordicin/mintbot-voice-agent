@@ -401,7 +401,7 @@ struct Agent::Impl {
             auto it = win_cache.find(j.seg);
             r.sd = gate->analyze(j.pcm.data(), j.pcm.size(), it == win_cache.end() ? nullptr : &it->second);
         }
-        if (r.sd.transcribe) {
+        if (r.sd.transcribe || opts.speaker_observe) {
             auto t0 = Clock::now();
             r.tr = asr.transcribe(j.pcm.data(), j.pcm.size());
             r.asr_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
@@ -500,13 +500,15 @@ struct Agent::Impl {
                 return o.boolean("speaker_enrolled", sd.enrolled)
                     .num("speaker_score", (double)sd.score)
                     .num("speaker_threshold", (double)sd.threshold)
+                    .boolean("speaker_same_device", sd.same_device)
+                    .boolean("speaker_transcribe", sd.transcribe)
                     .boolean("is_owner", sd.is_owner)
                     .boolean("speaker_uncertain", sd.uncertain)
                     .num("speaker_ms", sd.embed_ms)
                     .num("speaker_windows", (int64_t)sd.windows)
                     .num("speaker_reused", (int64_t)sd.reused);
             };
-            if (!sd.transcribe) {  // not the owner: no ASR, report only
+            if (!sd.transcribe && !opts.speaker_observe) {  // not the owner: no ASR, report only
                 busy_final_us += us_since(t_final);
                 ++skipped;
                 JsonObject o;

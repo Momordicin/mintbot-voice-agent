@@ -2,6 +2,7 @@
 
 #include "agent/audio_source.h"
 #include "agent/json.h"
+#include "asr/hotwords.h"
 #include "common/wav_io.h"
 #include "dsp/apm.h"
 
@@ -31,6 +32,9 @@ int64_t steady_ms() {
 struct Agent::Impl {
     EventHub& hub;
     AgentOptions opts;
+    std::mutex hw_m;  // the list may be replaced from the HTTP thread
+    std::shared_ptr<const asr::Hotwords> hotwords = std::make_shared<asr::Hotwords>();
+    std::string hotwords_list, wake_name;
     dsp::AudioPreprocessor apm;  // front thread only
     std::vector<float> apm_out;  // front thread only
     WavWriter recorder;          // front thread only
@@ -535,12 +539,27 @@ struct Agent::Impl {
             }
             busy_final_us += us_since(t_final);
             ++utterances;
+            std::shared_ptr<const asr::Hotwords> hw;
+            std::string wake;
+            {
+                std::lock_guard<std::mutex> lk(hw_m);
+                hw = hotwords;
+                wake = wake_name;
+            }
+            const asr::HotwordResult fixed = hw->apply(tr.text);
+            const asr::Address addr = asr::find_address(fixed.text, wake);
+            std::string matches = "[";
+            for (size_t i = 0; i < fixed.matches.size(); i++)
+                matches += (i ? "," : "") + JsonObject().str("from", fixed.matches[i].from).str("to", fixed.matches[i].to).dump();
             JsonObject o;
             o.num("start_ms", p.utt.start_ms)
                 .num("end_ms", p.utt.end_ms)
                 .num("end_unix_ms", p.end_unix_ms)
-                .str("text", tr.text)
-                .str("language", tr.language)
+                .str("text", fixed.text)
+                .str("text_raw", tr.text)
+                .raw("hotwords", matches + "]");
+            if (addr.addressed) o.str("name", wake).str("command", addr.rest);
+            o.str("language", tr.language)
                 .str("emotion", tr.emotion)
                 .str("event", tr.event)
                 .str("raw", tr.raw)
@@ -548,7 +567,7 @@ struct Agent::Impl {
                 .boolean("early", reuse);
             if (gate) speaker(o).boolean("enrolling", sd.enrolling);
             const int64_t lat = steady_ms() - p.detected_steady_ms;
-            hub.publish("final", o.num("latency_ms", lat)
+            hub.publish(addr.addressed ? "command" : "final", o.num("latency_ms", lat)
                                      .num("queue_ms", queue_ms)
                                      .num("detect_lag_ms", p.detect_lag_ms)
                                      .num("total_ms", p.detect_lag_ms + lat)
@@ -577,6 +596,7 @@ bool Agent::load(const std::string& vad_gguf, const std::string& asr_gguf, const
         m.gate->set_abort_callback(&Impl::abort_early, &m);
     }
     m.asr.set_abort_callback(&Impl::abort_early, &m);
+    set_hotwords(opts.hotwords, opts.wake_name);
     m.loaded = true;
     m.running = true;
     m.front_th = std::thread([&m] { m.front_loop(); });
@@ -655,6 +675,7 @@ std::string Agent::status_json() {
         .num("ns_level", (int64_t)m.opts.pipe.apm.ns_level)
         .boolean("agc2", m.opts.pipe.apm.enabled && m.opts.pipe.apm.agc2)
         .boolean("recording", !m.opts.record_path.empty())
+        .raw("hotwords", hotwords_json())
         .num("utterances", m.utterances.load())
         .num("skipped_other_speaker", m.skipped.load())
         .raw("speaker", m.gate ? m.gate->status_json() : "null")
@@ -675,6 +696,29 @@ std::string Agent::status_json() {
 }
 
 spk::SpeakerGate* Agent::speaker() { return p_->gate.get(); }
+
+void Agent::set_hotwords(const std::string& list, const std::string& wake_name) {
+    auto hw = std::make_shared<asr::Hotwords>();
+    hw->parse(list);
+    std::lock_guard<std::mutex> lk(p_->hw_m);
+    p_->hotwords = std::move(hw);
+    p_->hotwords_list = list;
+    p_->wake_name = wake_name;
+}
+
+std::string Agent::wake_name() {
+    std::lock_guard<std::mutex> lk(p_->hw_m);
+    return p_->wake_name;
+}
+
+std::string Agent::hotwords_json() {
+    std::lock_guard<std::mutex> lk(p_->hw_m);
+    return JsonObject()
+        .str("wake_name", p_->wake_name)
+        .num("entries", (int64_t)p_->hotwords->size())
+        .str("list", p_->hotwords_list)
+        .dump();
+}
 
 void Agent::shutdown() {
     Impl& m = *p_;

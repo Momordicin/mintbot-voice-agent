@@ -4,8 +4,9 @@
 //
 //   pipeline-cli --vad fsmn-vad.gguf -m sensevoice.gguf -a audio.wav [--frame-ms 10]
 //                [--language auto] [--no-itn] [--threads 4] [--end-sil 800]
-//                [--apm [--ns 0-4] [--no-agc] [--no-hpf]]
+//                [--apm [--ns 0-4] [--no-agc] [--no-hpf]] [--hotwords hot.txt] [--wake-name NAME]
 #include "pipeline/pipeline.h"
+#include "asr/hotwords.h"
 #include "common/wav_io.h"
 
 #include <algorithm>
@@ -27,7 +28,7 @@ static std::string json_str(const std::string& s) {
 
 int main(int argc, char** argv) {
     mintbot::use_utf8_argv(argc, argv);
-    std::string vad_path, asr_path, wav;
+    std::string vad_path, asr_path, wav, hot_path, wake_name;
     int frame_ms = 10;
     mintbot::pipeline::PipelineOptions opts;
     for (int i = 1; i < argc; i++) {
@@ -49,13 +50,25 @@ int main(int argc, char** argv) {
         else if (a == "--ns") opts.apm.ns_level = atoi(next());
         else if (a == "--no-agc") opts.apm.agc2 = false;
         else if (a == "--no-hpf") opts.apm.high_pass = false;
+        else if (a == "--hotwords") hot_path = next();
+        else if (a == "--wake-name") wake_name = next();
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); return 2; }
     }
     if (vad_path.empty() || asr_path.empty() || wav.empty() || frame_ms < 1) {
         fprintf(stderr, "usage: %s --vad fsmn-vad.gguf -m sensevoice.gguf -a audio.wav [--frame-ms N] "
                         "[--language L] [--no-itn] [--threads N] [--end-sil MS] [--max-seg MS] "
-                        "[--apm [--ns 0-4] [--no-agc] [--no-hpf]]\n", argv[0]);
+                        "[--apm [--ns 0-4] [--no-agc] [--no-hpf]] [--hotwords hot.txt] [--wake-name NAME]\n", argv[0]);
         return 2;
+    }
+    mintbot::asr::Hotwords hot;
+    if (!hot_path.empty()) {
+        FILE* f = mintbot::fopen_utf8(hot_path, "rb");
+        if (!f) { fprintf(stderr, "cannot read %s\n", hot_path.c_str()); return 1; }
+        std::string s;
+        char buf[4096];
+        for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) s.append(buf, n);
+        fclose(f);
+        hot.parse(s);
     }
     std::vector<float> pcm;
     if (!read_wav16k(wav.c_str(), pcm)) { fprintf(stderr, "need a 16 kHz mono PCM16 wav: %s\n", wav.c_str()); return 1; }
@@ -69,10 +82,15 @@ int main(int argc, char** argv) {
     auto emit = [&](const std::vector<mintbot::pipeline::Result>& rs) {
         for (const auto& r : rs) {
             const auto& t = r.transcript;
+            const auto hw = hot.apply(t.text);
+            const auto addr = mintbot::asr::find_address(hw.text, wake_name);
+            std::string extra;
+            if (!hot_path.empty()) extra += ", \"text_raw\": " + json_str(t.text);
+            if (addr.addressed) extra += ", \"command\": " + json_str(addr.rest);
             printf("{\"start_ms\": %lld, \"end_ms\": %lld, \"language\": %s, \"emotion\": %s, \"event\": %s, "
-                   "\"text\": %s, \"asr_ms\": %.1f}\n",
+                   "\"text\": %s%s, \"asr_ms\": %.1f}\n",
                    (long long)r.start_ms, (long long)r.end_ms, json_str(t.language).c_str(), json_str(t.emotion).c_str(),
-                   json_str(t.event).c_str(), json_str(t.text).c_str(), r.asr_ms);
+                   json_str(t.event).c_str(), json_str(hw.text).c_str(), extra.c_str(), r.asr_ms);
             fflush(stdout);
             ++n_utt;
             asr_total += r.asr_ms;

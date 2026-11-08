@@ -25,6 +25,15 @@ reuses the SenseVoice front end, SAN-M encoder graph and CTC decode from
 
 Copyright (c) 2025 FunASR. MIT License.
 
+## asr-hotword — MIT License
+
+`src/asr/hotwords.h` follows the hotword list format (`target | alias ~~~
+blacklist`) and the replacement rules (blacklist window, longest non-overlapping
+matches) of https://github.com/HaujetZhao/asr-hotword (`hotword/hot_phoneme.py`),
+without its phoneme matching.
+
+Copyright (c) 2026 HaujetZhao. MIT License.
+
 ## ggml — MIT License
 
 Fetched at build time from https://github.com/ggml-org/llama.cpp (commit

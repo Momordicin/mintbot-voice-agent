@@ -23,6 +23,8 @@ struct AgentOptions {
     int early_asr_ms = 200;         // run scoring + ASR after this much silence; 0 = off
     int vad_block_ms = 50;
     bool speaker_observe = false;   // testing: transcribe every utterance, only report the decision
+    std::string hotwords;           // list in the asr/hotwords.h format
+    std::string wake_name;          // utterances calling it are published as `command`
 };
 
 class Agent {
@@ -39,6 +41,9 @@ public:
 
     std::string status_json();
     spk::SpeakerGate* speaker();  // nullptr without a speaker gate
+    void set_hotwords(const std::string& list, const std::string& wake_name);
+    std::string wake_name();
+    std::string hotwords_json();
     void shutdown();
 
 private:

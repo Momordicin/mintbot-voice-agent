@@ -11,7 +11,9 @@
 //   GET  /v1/speaker                      owner voiceprint state (with --spk-model)
 //   POST /v1/speaker/enroll/{start,commit,cancel}   enrollment from the next utterances
 //   DELETE /v1/speaker                    forget the voiceprint (deletes the file)
-//   GET  /v1/events                       SSE: status, speech_start, speech_end, final, speech_other,
+//   GET  /v1/hotwords                     hotword list and wake name
+//   PUT  /v1/hotwords[?wake_name=NAME]    replace the list (body: asr/hotwords.h format)
+//   GET  /v1/events                       SSE: status, speech_start, speech_end, final, command, speech_other,
 //                                         enroll_progress, enroll_failed, speaker, device, error
 // Every endpoint but /v1/health needs "Authorization: Bearer $MINTBOT_VOICE_TOKEN".
 // The process exits when stdin reaches EOF (the parent went away), on
@@ -20,6 +22,7 @@
 #include "agent/audio_source.h"
 #include "agent/event_hub.h"
 #include "agent/json.h"
+#include "asr/hotwords.h"
 #include "dsp/apm.h"
 
 #include "common/utf8.h"
@@ -108,6 +111,8 @@ void usage(const char* argv0) {
             "  --speaker-short-floor X  uncertain utterances scoring below X are dropped too (default 0.3)\n"
             "  --speaker-gate-short   drop every uncertain utterance below the threshold (default: transcribe them)\n"
             "  --speaker-observe      testing: transcribe every utterance, only report the speaker decision\n"
+            "  --hotwords FILE     hotword list: 'target | alias | alias ~~~ blacklisted | blacklisted' per line\n"
+            "  --wake-name NAME    utterances calling NAME are published as 'command' events\n"
             "  --no-stdin-watch    do not exit when stdin closes\n"
             "  --no-auth           allow running without MINTBOT_VOICE_TOKEN (local debugging only)\n",
             argv0, argv0);
@@ -163,6 +168,16 @@ int main(int argc, char** argv) {
         else if (a == "--speaker-min-ms") opts.speaker.min_reliable_ms = atoi(next());
         else if (a == "--speaker-gate-short") opts.speaker.gate_uncertain = true;
         else if (a == "--speaker-observe") opts.speaker_observe = true;
+        else if (a == "--hotwords") {
+            const char* path = next();
+            FILE* f = fopen_utf8(path, "rb");
+            if (!f) { fprintf(stderr, "cannot read %s\n", path); return 2; }
+            char buf[4096];
+            for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) opts.hotwords.append(buf, n);
+            fclose(f);
+            if (!asr::valid_utf8(opts.hotwords)) { fprintf(stderr, "%s is not UTF-8\n", path); return 2; }
+        }
+        else if (a == "--wake-name") opts.wake_name = next();
         else if (a == "--no-stdin-watch") stdin_watch = false;
         else if (a == "--no-auth") no_auth = true;
         else if (a == "-h" || a == "--help") { usage(argv[0]); return 0; }
@@ -254,6 +269,18 @@ int main(int argc, char** argv) {
             hub.publish("speaker", g.status_json());
             reply_json(res, 200, g.status_json());
         });
+    });
+    svr.Get("/v1/hotwords", [&](const httplib::Request&, httplib::Response& res) {
+        reply_json(res, 200, engine.hotwords_json());
+    });
+    svr.Put("/v1/hotwords", [&](const httplib::Request& req, httplib::Response& res) {
+        const std::string wake = req.has_param("wake_name") ? req.get_param_value("wake_name") : engine.wake_name();
+        if (!asr::valid_utf8(req.body) || !asr::valid_utf8(wake)) {
+            reply_json(res, 400, "{\"error\":\"the list and wake_name must be UTF-8\"}");
+            return;
+        }
+        engine.set_hotwords(req.body, wake);
+        reply_json(res, 200, engine.hotwords_json());
     });
     svr.Post("/v1/shutdown", [&](const httplib::Request&, httplib::Response& res) {
         reply_json(res, 200, "{\"status\":\"shutting down\"}");

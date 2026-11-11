@@ -42,8 +42,7 @@ public:
     std::string status_json();
     spk::SpeakerGate* speaker();  // nullptr without a speaker gate
     // Reads the list at `path` (empty: the last one) and makes `role` the current character
-    // (empty: keep it if the list has it, else the first). On failure the old list and
-    // character stay. `reply` gets the new state, or the error and its code.
+
     bool reload_hotwords(const std::string& path, const std::string& role, std::string* reply);
     std::string hotwords_json();
     void shutdown();

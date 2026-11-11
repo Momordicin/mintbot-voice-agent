@@ -212,18 +212,14 @@ public:
     }
 
     bool set_role(const std::string& id) {
-        const int r = find_role(id);
-        if (r < 0) return false;
-        role_ = r;
-        return true;
+        role_ = find_role(id);
+        return role_ >= 0;
     }
 
     std::string role() const { return role_ < 0 ? std::string() : roles_[role_].id; }
     const std::vector<HotwordRole>& roles() const { return roles_; }
     size_t size() const { return entries_.size(); }
 
-    // Correctly written names of every character are kept as they are; a misspelling that
-    // belongs to several names is replaced with the current character's.
     HotwordResult apply(const std::string& text) const {
         using namespace hotwords_detail;
         HotwordResult r{text, {}};
@@ -235,36 +231,49 @@ public:
             size_t entry;
             bool correct;
         };
-        std::vector<Cand> cands;
-        auto find_all = [&](const std::string& w, size_t entry, bool correct) {
-            for (size_t pos = low.find(w); pos != std::string::npos; pos = low.find(w, pos + 1)) {
-                if (!at_boundary(low, pos, w.size())) continue;
-                if (!correct && is_ascii(w) && !english_position_ok(text, sents, pos, w.size())) continue;
-                cands.push_back({pos, w.size(), entry, correct});
+        std::vector<char> taken(text.size(), 0);  // locked or replaced
+        std::vector<Cand> chosen;
+        auto is_free = [&](size_t pos, size_t len) {
+            return std::find(taken.begin() + pos, taken.begin() + pos + len, char(1)) == taken.begin() + pos + len;
+        };
+        auto find = [&](bool current, bool correct, std::vector<Cand>& out) {
+            for (size_t i = 0; i < entries_.size(); i++) {
+                if ((role_ >= 0 && entries_[i].role == role_) != current) continue;
+                auto add = [&](const std::string& w) {
+                    for (size_t pos = low.find(w); pos != std::string::npos; pos = low.find(w, pos + 1)) {
+                        if (!at_boundary(low, pos, w.size()) || !is_free(pos, w.size())) continue;
+                        if (!correct && is_ascii(w) && !english_position_ok(text, sents, pos, w.size())) continue;
+                        out.push_back({pos, w.size(), i, correct});
+                    }
+                };
+                if (correct) add(entries_[i].target_low);
+                else
+                    for (const auto& a : entries_[i].aliases) add(a);
             }
         };
-        for (size_t i = 0; i < entries_.size(); i++) {
-            find_all(entries_[i].target_low, i, true);
-            for (const auto& a : entries_[i].aliases) find_all(a, i, false);
-        }
-        // longer first, then the earlier one; at the same place a correct name wins, then the
-        // current character, then the order in the list; overlapping matches are dropped
-        std::sort(cands.begin(), cands.end(), [&](const Cand& x, const Cand& y) {
-            if (x.len != y.len) return x.len > y.len;
-            if (x.pos != y.pos) return x.pos < y.pos;
-            if (x.correct != y.correct) return x.correct;
-            const bool xc = entries_[x.entry].role == role_, yc = entries_[y.entry].role == role_;
-            if (xc != yc) return xc;
-            return x.entry < y.entry;
-        });
-        std::vector<Cand> chosen;
-        for (const auto& c : cands) {
-            bool overlap = false;
-            for (const auto& k : chosen) overlap = overlap || (c.pos < k.pos + k.len && k.pos < c.pos + c.len);
-            if (!overlap) chosen.push_back(c);
+        auto take = [&](std::vector<Cand> cands) {
+            std::sort(cands.begin(), cands.end(), [](const Cand& x, const Cand& y) {
+                if (x.len != y.len) return x.len > y.len;
+                if (x.pos != y.pos) return x.pos < y.pos;
+                if (x.correct != y.correct) return x.correct;
+                return x.entry < y.entry;
+            });
+            for (const auto& c : cands) {
+                if (!is_free(c.pos, c.len)) continue;
+                std::fill(taken.begin() + c.pos, taken.begin() + c.pos + c.len, char(1));
+                chosen.push_back(c);
+            }
+        };
+        for (const bool current : {true, false}) {
+            if (current && role_ < 0) continue;
+            std::vector<Cand> cands;
+            find(current, true, cands);
+            find(current, false, cands);
+            take(cands);
         }
         std::sort(chosen.begin(), chosen.end(), [](const Cand& x, const Cand& y) { return x.pos > y.pos; });
         for (const auto& c : chosen) {
+            if (c.correct) continue;
             const std::string& target = entries_[c.entry].target;
             const std::string from = text.substr(c.pos, c.len);
             if (from == target) continue;
@@ -292,10 +301,7 @@ private:
     int role_ = -1;
 };
 
-// The agent is called when the text starts with the name followed by punctuation (or
-// nothing else), or ends with it after punctuation or after 你 / 您 ("我相信你爱弥斯").
-// A name inside the sentence, or at the start with no break ("爱弥斯的技能"), is only
-// talked about.
+
 inline Address find_address(const std::string& text, const std::string& name) {
     using namespace hotwords_detail;
     Address a;

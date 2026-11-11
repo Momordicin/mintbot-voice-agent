@@ -71,10 +71,8 @@ int main(int argc, char** argv) {
         for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) s.append(buf, n);
         fclose(f);
         hot.parse(s);
-        if (!hot_role.empty() && !hot.set_role(hot_role)) {
-            fprintf(stderr, "character %s is not in %s\n", hot_role.c_str(), hot_path.c_str());
-            return 1;
-        }
+        if (!hot_role.empty() && !hot.set_role(hot_role))
+            fprintf(stderr, "character %s is not in %s: no current character\n", hot_role.c_str(), hot_path.c_str());
     }
     std::vector<float> pcm;
     if (!read_wav16k(wav.c_str(), pcm)) { fprintf(stderr, "need a 16 kHz mono PCM16 wav: %s\n", wav.c_str()); return 1; }

@@ -726,17 +726,19 @@ bool Agent::reload_hotwords(const std::string& path_in, const std::string& role,
     if (!asr::valid_utf8(text)) return fail("not_utf8", path + " is not UTF-8");
     auto hw = std::make_shared<asr::Hotwords>();
     hw->parse(text);
+    bool role_found = true;
     if (!role.empty()) {
-        if (!hw->set_role(role)) return fail("role_not_found", "character " + role + " is not in " + path);
-    } else if (!current.empty()) {
-        hw->set_role(current);  // not in the new list: its first character stays current
+        role_found = hw->set_role(role);  // unknown: no current character
+    } else {
+        for (const auto& r : hw->roles())  // keep the current one if the new list has it, else its first
+            if (r.id == current) hw->set_role(current);
     }
     {
         std::lock_guard<std::mutex> lk(m.hw_m);
         m.hotwords = std::move(hw);
         m.hotwords_path = path;
     }
-    if (reply) *reply = hotwords_json();
+    if (reply) *reply = std::string("{\"role_found\":") + (role_found ? "true," : "false,") + hotwords_json().substr(1);
     return true;
 }
 

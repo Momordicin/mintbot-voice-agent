@@ -34,7 +34,7 @@ struct Agent::Impl {
     AgentOptions opts;
     std::mutex hw_m;  // the list may be replaced from the HTTP thread
     std::shared_ptr<const asr::Hotwords> hotwords = std::make_shared<asr::Hotwords>();
-    std::string hotwords_list, wake_name;
+    std::string hotwords_path, wake_name;
     dsp::AudioPreprocessor apm;  // front thread only
     std::vector<float> apm_out;  // front thread only
     WavWriter recorder;          // front thread only
@@ -596,7 +596,14 @@ bool Agent::load(const std::string& vad_gguf, const std::string& asr_gguf, const
         m.gate->set_abort_callback(&Impl::abort_early, &m);
     }
     m.asr.set_abort_callback(&Impl::abort_early, &m);
-    set_hotwords(opts.hotwords, opts.wake_name);
+    m.wake_name = opts.wake_name;
+    if (!opts.hotwords_path.empty()) {
+        std::string reply;
+        if (!reload_hotwords(opts.hotwords_path, "", &reply)) {
+            if (error) *error = "cannot load the hotword list: " + reply;
+            return false;
+        }
+    }
     m.loaded = true;
     m.running = true;
     m.front_th = std::thread([&m] { m.front_loop(); });
@@ -697,26 +704,58 @@ std::string Agent::status_json() {
 
 spk::SpeakerGate* Agent::speaker() { return p_->gate.get(); }
 
-void Agent::set_hotwords(const std::string& list, const std::string& wake_name) {
+bool Agent::reload_hotwords(const std::string& path_in, const std::string& role, std::string* reply) {
+    Impl& m = *p_;
+    std::string path = path_in, current;
+    {
+        std::lock_guard<std::mutex> lk(m.hw_m);
+        if (path.empty()) path = m.hotwords_path;
+        current = m.hotwords->role();
+    }
+    auto fail = [&](const char* code, const std::string& message) {
+        if (reply) *reply = JsonObject().str("error", message).str("code", code).raw("hotwords", hotwords_json()).dump();
+        return false;
+    };
+    if (path.empty()) return fail("no_path", "no hotword list path given");
+    FILE* f = fopen_utf8(path, "rb");
+    if (!f) return fail("file_unreadable", "cannot read " + path);
+    std::string text;
+    char buf[4096];
+    for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) text.append(buf, n);
+    fclose(f);
+    if (!asr::valid_utf8(text)) return fail("not_utf8", path + " is not UTF-8");
     auto hw = std::make_shared<asr::Hotwords>();
-    hw->parse(list);
-    std::lock_guard<std::mutex> lk(p_->hw_m);
-    p_->hotwords = std::move(hw);
-    p_->hotwords_list = list;
-    p_->wake_name = wake_name;
-}
-
-std::string Agent::wake_name() {
-    std::lock_guard<std::mutex> lk(p_->hw_m);
-    return p_->wake_name;
+    hw->parse(text);
+    if (!role.empty()) {
+        if (!hw->set_role(role)) return fail("role_not_found", "character " + role + " is not in " + path);
+    } else if (!current.empty()) {
+        hw->set_role(current);  // not in the new list: its first character stays current
+    }
+    {
+        std::lock_guard<std::mutex> lk(m.hw_m);
+        m.hotwords = std::move(hw);
+        m.hotwords_path = path;
+    }
+    if (reply) *reply = hotwords_json();
+    return true;
 }
 
 std::string Agent::hotwords_json() {
     std::lock_guard<std::mutex> lk(p_->hw_m);
+    const asr::Hotwords& hw = *p_->hotwords;
+    std::string roles = "[", role_name;
+    for (size_t i = 0; i < hw.roles().size(); i++) {
+        const auto& r = hw.roles()[i];
+        if (r.id == hw.role()) role_name = r.name;
+        roles += (i ? "," : "") + JsonObject().str("id", r.id).str("name", r.name).num("entries", (int64_t)r.entries).dump();
+    }
     return JsonObject()
+        .str("path", p_->hotwords_path)
+        .num("entries", (int64_t)hw.size())
+        .str("role", hw.role())
+        .str("role_name", role_name)
+        .raw("roles", roles + "]")
         .str("wake_name", p_->wake_name)
-        .num("entries", (int64_t)p_->hotwords->size())
-        .str("list", p_->hotwords_list)
         .dump();
 }
 

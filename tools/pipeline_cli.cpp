@@ -4,7 +4,7 @@
 //
 //   pipeline-cli --vad fsmn-vad.gguf -m sensevoice.gguf -a audio.wav [--frame-ms 10]
 //                [--language auto] [--no-itn] [--threads 4] [--end-sil 800]
-//                [--apm [--ns 0-4] [--no-agc] [--no-hpf]] [--hotwords hot.txt] [--wake-name NAME]
+//                [--apm [--ns 0-4] [--no-agc] [--no-hpf]] [--hotwords hot.txt [--role ID]] [--wake-name NAME]
 #include "pipeline/pipeline.h"
 #include "asr/hotwords.h"
 #include "common/wav_io.h"
@@ -28,7 +28,7 @@ static std::string json_str(const std::string& s) {
 
 int main(int argc, char** argv) {
     mintbot::use_utf8_argv(argc, argv);
-    std::string vad_path, asr_path, wav, hot_path, wake_name;
+    std::string vad_path, asr_path, wav, hot_path, hot_role, wake_name;
     int frame_ms = 10;
     mintbot::pipeline::PipelineOptions opts;
     for (int i = 1; i < argc; i++) {
@@ -51,13 +51,15 @@ int main(int argc, char** argv) {
         else if (a == "--no-agc") opts.apm.agc2 = false;
         else if (a == "--no-hpf") opts.apm.high_pass = false;
         else if (a == "--hotwords") hot_path = next();
+        else if (a == "--role") hot_role = next();
         else if (a == "--wake-name") wake_name = next();
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); return 2; }
     }
     if (vad_path.empty() || asr_path.empty() || wav.empty() || frame_ms < 1) {
         fprintf(stderr, "usage: %s --vad fsmn-vad.gguf -m sensevoice.gguf -a audio.wav [--frame-ms N] "
                         "[--language L] [--no-itn] [--threads N] [--end-sil MS] [--max-seg MS] "
-                        "[--apm [--ns 0-4] [--no-agc] [--no-hpf]] [--hotwords hot.txt] [--wake-name NAME]\n", argv[0]);
+                        "[--apm [--ns 0-4] [--no-agc] [--no-hpf]] [--hotwords hot.txt [--role ID]] [--wake-name NAME]\n",
+                argv[0]);
         return 2;
     }
     mintbot::asr::Hotwords hot;
@@ -69,6 +71,10 @@ int main(int argc, char** argv) {
         for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) s.append(buf, n);
         fclose(f);
         hot.parse(s);
+        if (!hot_role.empty() && !hot.set_role(hot_role)) {
+            fprintf(stderr, "character %s is not in %s\n", hot_role.c_str(), hot_path.c_str());
+            return 1;
+        }
     }
     std::vector<float> pcm;
     if (!read_wav16k(wav.c_str(), pcm)) { fprintf(stderr, "need a 16 kHz mono PCM16 wav: %s\n", wav.c_str()); return 1; }

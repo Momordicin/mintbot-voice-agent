@@ -11,8 +11,8 @@
 //   GET  /v1/speaker                      owner voiceprint state (with --spk-model)
 //   POST /v1/speaker/enroll/{start,commit,cancel}   enrollment from the next utterances
 //   DELETE /v1/speaker                    forget the voiceprint (deletes the file)
-//   GET  /v1/hotwords                     hotword list and wake name
-//   PUT  /v1/hotwords[?wake_name=NAME]    replace the list (body: asr/hotwords.h format)
+//   GET  /v1/hotwords                     loaded hotword list: path, characters, current character
+//   POST /v1/hotwords/reload[?path=FILE][&role=ID]   re-read the list and set the current character
 //   GET  /v1/events                       SSE: status, speech_start, speech_end, final, command, speech_other,
 //                                         enroll_progress, enroll_failed, speaker, device, error
 // Every endpoint but /v1/health needs "Authorization: Bearer $MINTBOT_VOICE_TOKEN".
@@ -111,7 +111,8 @@ void usage(const char* argv0) {
             "  --speaker-short-floor X  uncertain utterances scoring below X are dropped too (default 0.3)\n"
             "  --speaker-gate-short   drop every uncertain utterance below the threshold (default: transcribe them)\n"
             "  --speaker-observe      testing: transcribe every utterance, only report the speaker decision\n"
-            "  --hotwords FILE     hotword list: 'target | alias | alias ~~~ blacklisted | blacklisted' per line\n"
+            "  --hotwords FILE     hotword list to load at start ('target | alias | alias' per line, a section per\n"
+            "                      character from '# <character> <date> <id>'); POST /v1/hotwords/reload replaces it\n"
             "  --wake-name NAME    utterances calling NAME are published as 'command' events\n"
             "  --no-stdin-watch    do not exit when stdin closes\n"
             "  --no-auth           allow running without MINTBOT_VOICE_TOKEN (local debugging only)\n",
@@ -168,15 +169,7 @@ int main(int argc, char** argv) {
         else if (a == "--speaker-min-ms") opts.speaker.min_reliable_ms = atoi(next());
         else if (a == "--speaker-gate-short") opts.speaker.gate_uncertain = true;
         else if (a == "--speaker-observe") opts.speaker_observe = true;
-        else if (a == "--hotwords") {
-            const char* path = next();
-            FILE* f = fopen_utf8(path, "rb");
-            if (!f) { fprintf(stderr, "cannot read %s\n", path); return 2; }
-            char buf[4096];
-            for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) opts.hotwords.append(buf, n);
-            fclose(f);
-            if (!asr::valid_utf8(opts.hotwords)) { fprintf(stderr, "%s is not UTF-8\n", path); return 2; }
-        }
+        else if (a == "--hotwords") opts.hotwords_path = next();
         else if (a == "--wake-name") opts.wake_name = next();
         else if (a == "--no-stdin-watch") stdin_watch = false;
         else if (a == "--no-auth") no_auth = true;
@@ -273,14 +266,15 @@ int main(int argc, char** argv) {
     svr.Get("/v1/hotwords", [&](const httplib::Request&, httplib::Response& res) {
         reply_json(res, 200, engine.hotwords_json());
     });
-    svr.Put("/v1/hotwords", [&](const httplib::Request& req, httplib::Response& res) {
-        const std::string wake = req.has_param("wake_name") ? req.get_param_value("wake_name") : engine.wake_name();
-        if (!asr::valid_utf8(req.body) || !asr::valid_utf8(wake)) {
-            reply_json(res, 400, "{\"error\":\"the list and wake_name must be UTF-8\"}");
+    svr.Post("/v1/hotwords/reload", [&](const httplib::Request& req, httplib::Response& res) {
+        const std::string path = req.has_param("path") ? req.get_param_value("path") : "";
+        const std::string role = req.has_param("role") ? req.get_param_value("role") : "";
+        if (!asr::valid_utf8(path) || !asr::valid_utf8(role)) {
+            reply_json(res, 400, "{\"error\":\"path and role must be UTF-8\",\"code\":\"not_utf8\"}");
             return;
         }
-        engine.set_hotwords(req.body, wake);
-        reply_json(res, 200, engine.hotwords_json());
+        std::string reply;
+        reply_json(res, engine.reload_hotwords(path, role, &reply) ? 200 : 400, reply);
     });
     svr.Post("/v1/shutdown", [&](const httplib::Request&, httplib::Response& res) {
         reply_json(res, 200, "{\"status\":\"shutting down\"}");

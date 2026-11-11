@@ -23,7 +23,7 @@ struct AgentOptions {
     int early_asr_ms = 200;         // run scoring + ASR after this much silence; 0 = off
     int vad_block_ms = 50;
     bool speaker_observe = false;   // testing: transcribe every utterance, only report the decision
-    std::string hotwords;           // list in the asr/hotwords.h format
+    std::string hotwords_path;      // hotword list (asr/hotwords.h format) loaded at start
     std::string wake_name;          // utterances calling it are published as `command`
 };
 
@@ -41,8 +41,10 @@ public:
 
     std::string status_json();
     spk::SpeakerGate* speaker();  // nullptr without a speaker gate
-    void set_hotwords(const std::string& list, const std::string& wake_name);
-    std::string wake_name();
+    // Reads the list at `path` (empty: the last one) and makes `role` the current character
+    // (empty: keep it if the list has it, else the first). On failure the old list and
+    // character stay. `reply` gets the new state, or the error and its code.
+    bool reload_hotwords(const std::string& path, const std::string& role, std::string* reply);
     std::string hotwords_json();
     void shutdown();
 

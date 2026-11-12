@@ -6,7 +6,7 @@ export const API_VERSION = 1;
 
 export interface AgentEvent {
   id: number;
-  // status | speech_start | speech_end | final | speech_other | device | capture | error |
+  // status | speech_start | speech_end | final | command | speech_other | device | capture | error |
   // enroll_progress | enroll_failed | speaker, plus "snapshot" from the supervisor (see VoiceAgentSupervisor)
   type: string;
   data: any;
@@ -48,7 +48,10 @@ export interface FinalEvent extends SpeakerFields, TimingFields {
   start_ms: number; // stream time
   end_ms: number;
   end_unix_ms: number;
+  // after hotword correction; empty when the recognized text was only punctuation, e.g. a cough (agent >= 0.3.0)
   text: string;
+  text_raw: string; // before hotword correction (agent >= 0.2.3)
+  hotwords: HotwordReplacement[]; // replacements made in `text`, in order (agent >= 0.2.3)
   language: string; // e.g. "zh"
   emotion: string; // e.g. "NEUTRAL"
   event: string; // e.g. "Speech"
@@ -58,11 +61,27 @@ export interface FinalEvent extends SpeakerFields, TimingFields {
   enrolling?: boolean;
 }
 
-// `speech_other` event: an utterance that was not transcribed (not the owner).
+export interface HotwordReplacement {
+  from: string; // as recognized
+  to: string; // the list's correct name
+}
+
+// `command` event (agent >= 0.2.3, with --wake-name): a `final` that calls the agent by name,
+// at the start ("<name>, ...") or at the end ("..., <name>"); sent instead of `final`.
+export interface CommandEvent extends FinalEvent {
+  name: string; // the wake name
+  command: string; // the rest of the utterance
+}
+
+// `speech_other` event: an utterance that is not the owner's; its text is never sent.
 export interface SpeechOtherEvent extends SpeakerFields, TimingFields {
   start_ms: number;
   end_ms: number;
   end_unix_ms: number;
+  // only when it is a cough, sneeze, laugh, cry or breath (agent >= 0.3.0)
+  event?: "Cough" | "Sneeze" | "Laughter" | "Cry" | "Breath";
+  emotion?: string;
+  asr_ms?: number; // agent >= 0.3.0
 }
 
 // `enroll_progress` event, and the answer of POST /v1/speaker/enroll/start
@@ -121,6 +140,28 @@ export interface SpeakerStatus {
   enroll_speech_ms: number;
   enroll_ready: boolean;
   persistent: boolean; // --speaker-db given: the voiceprint is kept in a file
+}
+
+// GET /v1/hotwords and `hotwords` in GET /v1/status (agent >= 0.2.4).
+export interface HotwordsStatus {
+  path: string; // the loaded list; "" if none
+  entries: number;
+  role: string; // id of the current character; "" if none
+  role_name: string;
+  roles: { id: string; name: string; entries: number }[]; // one per "# <character> <date> <id>" section
+  wake_name: string;
+}
+
+// 200 answer of POST /v1/hotwords/reload[?path=FILE][&role=ID] (agent >= 0.2.4).
+export interface HotwordsReloadReply extends HotwordsStatus {
+  role_found: boolean; // false: `role` is not in the list, no character is current
+}
+
+// 400 answer of POST /v1/hotwords/reload: the previous list stays loaded.
+export interface HotwordsReloadError {
+  error: string;
+  code: "no_path" | "file_unreadable" | "not_utf8";
+  hotwords?: HotwordsStatus; // absent when path or role was not UTF-8
 }
 
 // Error codes of POST /v1/listen/start and of `capture` events.

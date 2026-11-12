@@ -6,6 +6,7 @@
 #include "common/wav_io.h"
 #include "dsp/apm.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -391,6 +392,18 @@ struct Agent::Impl {
     }
 
     // ---- ASR thread ----
+    asr::Transcript transcribe(const std::vector<float>& pcm, double& ms) {
+        const auto t0 = Clock::now();
+        asr::Transcript tr = asr.transcribe(pcm.data(), pcm.size());
+        ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+        return tr;
+    }
+
+    spk::SpeakerDecision analyze(int64_t seg_start, const std::vector<float>& pcm) {
+        auto it = win_cache.find(seg_start);
+        return gate->analyze(pcm.data(), pcm.size(), it == win_cache.end() ? nullptr : &it->second);
+    }
+
     void run_early(EarlyJob& j) {
         if (j.seg <= win_done_seg || j.gen <= early_dead) return;
         if (gate && gate->enrolling()) return;  // enrollment must see each utterance exactly once
@@ -400,15 +413,11 @@ struct Agent::Impl {
         EarlyResult r;
         r.seg = j.seg;
         r.end_ms = j.end_ms;
-        if (gate) {
+        // as FunASR: transcribe first, then score the speaker on the same samples
+        r.tr = transcribe(j.pcm, r.asr_ms);
+        if (gate && j.gen > early_dead) {
             r.spk_version = gate->version();
-            auto it = win_cache.find(j.seg);
-            r.sd = gate->analyze(j.pcm.data(), j.pcm.size(), it == win_cache.end() ? nullptr : &it->second);
-        }
-        if (r.sd.transcribe || opts.speaker_observe) {
-            auto t0 = Clock::now();
-            r.tr = asr.transcribe(j.pcm.data(), j.pcm.size());
-            r.asr_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+            r.sd = analyze(j.seg, j.pcm);
         }
         early_running = -1;
         r.busy_us = us_since(t_run);
@@ -479,19 +488,23 @@ struct Agent::Impl {
             }
             const auto t_final = Clock::now();
             early.valid = false;
+            // transcribe first, then score the speaker; the decision only selects what is published
+            asr::Transcript tr;
+            double asr_ms = 0;
             spk::SpeakerDecision sd;
             if (reuse) {
+                tr = std::move(used.tr);
+                asr_ms = used.asr_ms;
                 sd = used.sd;
-                if (gate) {
-                    win_done_seg = p.utt.start_sample;
-                    win_cache.erase(win_cache.begin(), win_cache.upper_bound(p.utt.start_sample));
-                }
-            } else if (gate) {
-                auto it = win_cache.find(p.utt.start_sample);
-                sd = gate->analyze(p.utt.pcm.data(), p.utt.pcm.size(), it == win_cache.end() ? nullptr : &it->second);
+            } else {
+                tr = transcribe(p.utt.pcm, asr_ms);
+                if (gate) sd = analyze(p.utt.start_sample, p.utt.pcm);
+            }
+            if (gate) {
                 win_done_seg = p.utt.start_sample;
                 win_cache.erase(win_cache.begin(), win_cache.upper_bound(p.utt.start_sample));
             }
+            busy_final_us += us_since(t_final);
             if (sd.enrolling) {
                 auto st = gate->enroll_state();
                 hub.publish("enroll_progress", JsonObject()
@@ -512,11 +525,15 @@ struct Agent::Impl {
                     .num("speaker_windows", (int64_t)sd.windows)
                     .num("speaker_reused", (int64_t)sd.reused);
             };
-            if (!sd.transcribe && !opts.speaker_observe) {  // not the owner: no ASR, report only
-                busy_final_us += us_since(t_final);
+            if (!sd.transcribe && !opts.speaker_observe) {  // not the owner: no text, only a non-speech event
                 ++skipped;
                 JsonObject o;
                 o.num("start_ms", p.utt.start_ms).num("end_ms", p.utt.end_ms).num("end_unix_ms", p.end_unix_ms);
+                // a voiceprint cannot tell whose cough it is, so these pass the gate
+                static const char* const kPassEvents[] = {"Cough", "Sneeze", "Laughter", "Cry", "Breath"};
+                if (std::find(std::begin(kPassEvents), std::end(kPassEvents), tr.event) != std::end(kPassEvents))
+                    o.str("event", tr.event).str("emotion", tr.emotion);
+                o.num("asr_ms", asr_ms);
                 const int64_t lat = steady_ms() - p.detected_steady_ms;
                 hub.publish("speech_other", speaker(o)
                                                 .num("latency_ms", lat)
@@ -527,18 +544,9 @@ struct Agent::Impl {
                                                 .dump());
                 continue;
             }
-            asr::Transcript tr;
-            double asr_ms = 0;
-            if (reuse) {
-                tr = std::move(used.tr);
-                asr_ms = used.asr_ms;
-            } else {
-                auto t0 = Clock::now();
-                tr = asr.transcribe(p.utt.pcm.data(), p.utt.pcm.size());
-                asr_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
-            }
-            busy_final_us += us_since(t_final);
             ++utterances;
+            // a cough or a laugh alone often comes out as a lone "." : only the event and emotion remain
+            if (asr::hotwords_detail::trim_separators(tr.text, true, true).empty()) tr.text.clear();
             std::shared_ptr<const asr::Hotwords> hw;
             std::string wake;
             {

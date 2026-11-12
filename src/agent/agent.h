@@ -1,4 +1,4 @@
-// Always-on voice agent engine: capture -> VAD -> speaker gate -> ASR, published as JSON events.
+// Always-on voice agent engine: capture -> VAD -> ASR -> speaker gate, published as JSON events.
 #pragma once
 
 #include "agent/event_hub.h"

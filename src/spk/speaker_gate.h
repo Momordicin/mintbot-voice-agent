@@ -1,5 +1,5 @@
 // Owner-speaker gate on top of CAM++: enrolls the owner's voiceprint, keeps it in a
-// file, and scores each utterance against it to decide whether it is transcribed.
+// file, and scores each transcribed utterance against it to decide whether its text is published.
 // Scoring follows FunASR's streaming speaker assignment (funasr/bin/realtime_ws.py).
 #pragma once
 

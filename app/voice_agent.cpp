@@ -110,7 +110,7 @@ void usage(const char* argv0) {
             "  --speaker-min-ms MS    shorter utterances are 'uncertain' (default 1000)\n"
             "  --speaker-short-floor X  uncertain utterances scoring below X are dropped too (default 0.3)\n"
             "  --speaker-gate-short   drop every uncertain utterance below the threshold (default: transcribe them)\n"
-            "  --speaker-observe      testing: transcribe every utterance, only report the speaker decision\n"
+            "  --speaker-observe      testing: publish every utterance as final, only report the speaker decision\n"
             "  --hotwords FILE     hotword list to load at start ('target | alias | alias' per line, a section per\n"
             "                      character from '# <character> <date> <id>'); POST /v1/hotwords/reload replaces it\n"
             "  --wake-name NAME    utterances calling NAME are published as 'command' events\n"

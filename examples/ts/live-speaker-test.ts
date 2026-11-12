@@ -57,15 +57,23 @@ async function session(kind: string, onEvent: (ev: any, agent: VoiceAgent) => Pr
   return { agent, base, abort, done, get finished() { return finished; } };
 }
 
+// "Cough / EMO_UNKNOWN", or "-" when the event carries no tags (speech_other of plain speech)
+function tags(d: any) {
+  return (d.event ? `${d.event} / ${d.emotion}` : "-").padEnd(22);
+}
+
+// the text, "(空)" for a final whose text was only punctuation, "(不发文字)" for speech_other
+function body(ev: any) {
+  return ev.type === "speech_other" ? "(不发文字)" : ev.data.text || "(空)";
+}
+
 function line(ev: any) {
   const d = ev.data;
   const s = d.speaker_enrolled && typeof d.speaker_score === "number" ? d.speaker_score.toFixed(2) : "  - ";
   const unc = d.speaker_uncertain ? "?" : " ";
   const len = ((d.end_ms - d.start_ms) / 1000).toFixed(1).padStart(4) + "s";
-  if (ev.type === "speech_other") return `  [其他人 ${s}${unc}] ${len}  (未识别)`;
-  if (d.enrolling) return `  [录入中 ${s}${unc}] ${len}  ${d.text}`;
-  if (!d.speaker_enrolled) return `  [未录入 ${s}${unc}] ${len}  ${d.text}`;
-  return `  [${d.is_owner ? "主人  " : "其他人"} ${s}${unc}] ${len}  ${d.text}`;
+  const who = ev.type === "speech_other" ? "其他人" : d.enrolling ? "录入中" : !d.speaker_enrolled ? "未录入" : d.is_owner ? "主人  " : "其他人";
+  return `  [${who} ${s}${unc}] ${len}  ${tags(d)} ${body(ev)}`;
 }
 
 async function enroll() {
@@ -93,7 +101,7 @@ function crossLine(ev: any) {
   const d = ev.data;
   const label = d.speaker_transcribe ? "主人  " : "其他人";
   const len = ((d.end_ms - d.start_ms) / 1000).toFixed(2) + "s";
-  return `  [${label}] 分数 ${d.speaker_score.toFixed(3)}  阈值 ${d.speaker_threshold.toFixed(3)}  长度 ${len}  ${d.text}`;
+  return `  [${label}] 分数 ${d.speaker_score.toFixed(3)}  阈值 ${d.speaker_threshold.toFixed(3)}  长度 ${len}  ${tags(d)} ${body(ev)}`;
 }
 
 async function testSession(kind: string) {
@@ -106,7 +114,13 @@ async function testSession(kind: string) {
   const cross = kind === "cross";
   console.log(`\n== ${kind} 场次：${hint[kind]}。按回车结束这一场。`);
   const stats = { owner: 0, other: 0, scores: [] as number[] };
+  const events = { final: new Map<string, number>(), speech_other: new Map<string, number>() };
   const s = await session(kind, async (ev) => {
+    if (ev.type === "final" || ev.type === "speech_other") {
+      const m = events[ev.type as "final" | "speech_other"];
+      const k = ev.data.event || "-";
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
     if (cross && ev.type === "final") {
       console.log(crossLine(ev));
       stats.scores.push(ev.data.speaker_score);
@@ -139,6 +153,8 @@ async function testSession(kind: string) {
   const sc = stats.scores.sort((a, b) => a - b);
   const pct = (p: number) => (sc.length ? sc[Math.min(sc.length - 1, Math.floor(p * sc.length))].toFixed(2) : "-");
   console.log(`  本场：判为主人 ${stats.owner} 句，判为其他人 ${stats.other} 句；分数 最低 ${pct(0)} 中位 ${pct(0.5)} 最高 ${pct(0.999)}`);
+  const count = (m: Map<string, number>) => [...m].map(([k, n]) => `${k} ${n}`).join("、") || "无";
+  console.log(`  事件：final ${count(events.final)}；speech_other ${count(events.speech_other)}`);
   console.log(`  录音：${s.base}.wav`);
 }
 

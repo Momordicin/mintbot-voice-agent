@@ -19,7 +19,7 @@ await voice.stop();
 ```
 
 Options, progress phases, error codes (`InstallErrorCode`) and event payloads
-(`FinalEvent`, `SpeechOtherEvent`, `SpeakerStatus`, ...) are documented in the
+(`FinalEvent`, `CommandEvent`, `SpeechOtherEvent`, `SpeakerStatus`, `HotwordsStatus`, ...) are documented in the
 comments of the TypeScript sources shipped in `src/`; with the declaration
 maps, "go to definition" in an editor opens them.
 

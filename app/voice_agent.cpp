@@ -93,6 +93,7 @@ void usage(const char* argv0) {
             "  --device N          capture device index for --autostart (default: system default)\n"
             "  --language L        auto (default), zh, en, yue, ja, ko\n"
             "  --no-itn            spoken-form output (no punctuation / digits)\n"
+            "  --ban-emo-unk       never report the emotion EMO_UNKNOWN; the likeliest other emotion instead\n"
             "  --threads N         ASR threads (default 4)\n"
             "  --end-sil MS        silence that ends an utterance (default 800)\n"
             "  --max-seg MS        longest utterance (default 30000)\n"
@@ -144,6 +145,7 @@ int main(int argc, char** argv) {
         else if (a == "--device") device = atoi(next());
         else if (a == "--language") opts.pipe.asr.language = next();
         else if (a == "--no-itn") opts.pipe.asr.itn = false;
+        else if (a == "--ban-emo-unk") opts.pipe.asr.ban_emo_unk = true;
         else if (a == "--threads") opts.pipe.asr.n_threads = atoi(next());
         else if (a == "--end-sil") opts.pipe.vad.max_end_silence_ms = atoi(next());
         else if (a == "--max-seg") opts.pipe.vad.max_single_segment_ms = atoi(next());

@@ -19,6 +19,7 @@ struct SenseVoiceOptions {
     int         n_threads = 4;
     std::string language  = "auto";  // auto, zh, en, yue, ja, ko, nospeech
     bool        itn       = true;    // punctuation, casing and digits
+    bool        ban_emo_unk = false; // never emit EMO_UNKNOWN: the likeliest other emotion instead (FunASR option)
 };
 
 struct Transcript {

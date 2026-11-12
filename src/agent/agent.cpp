@@ -530,7 +530,7 @@ struct Agent::Impl {
                 JsonObject o;
                 o.num("start_ms", p.utt.start_ms).num("end_ms", p.utt.end_ms).num("end_unix_ms", p.end_unix_ms);
                 // a voiceprint cannot tell whose cough it is, so these pass the gate
-                static const char* const kPassEvents[] = {"Cough", "Sneeze", "Laughter", "Cry", "Breath"};
+                static const char* const kPassEvents[] = {"Cough", "Sneeze", "Laughter", "Cry", "Breath", "Applause"};
                 if (std::find(std::begin(kPassEvents), std::end(kPassEvents), tr.event) != std::end(kPassEvents))
                     o.str("event", tr.event).str("emotion", tr.emotion);
                 o.num("asr_ms", asr_ms);

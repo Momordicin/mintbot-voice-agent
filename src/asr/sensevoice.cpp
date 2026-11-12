@@ -142,6 +142,7 @@ struct SenseVoice::Impl {
     ggml_context* ctx_w = nullptr;
     std::map<std::string, ggml_tensor*> t;
     std::vector<std::string> vocab;
+    int emo_unk = -1;          // id of <|EMO_UNKNOWN|>
     std::vector<float> query;  // nq x 560 query-token embedding rows
     int nq = 0;
     ggml_backend_t backend = nullptr;
@@ -235,7 +236,8 @@ struct SenseVoice::Impl {
             ggml_backend_tensor_get(logits, lg.data(), 0, ggml_nbytes(logits));
             int prev = -1;
             for (int n = 0; n < N; n++) {
-                const float* col = &lg[(size_t)n * vocab_size];
+                float* col = &lg[(size_t)n * vocab_size];
+                if (opts.ban_emo_unk && emo_unk >= 0) col[emo_unk] = -INFINITY;  // FunASR's ban_emo_unk
                 int am = (int)(std::max_element(col, col + vocab_size) - col);
                 if (am != prev && am != blank) ids.push_back(am);
                 prev = am;
@@ -302,6 +304,8 @@ bool SenseVoice::load(const std::string& path, const SenseVoiceOptions& opts) {
     }
     gguf_free(gg);
     if (m.vocab.empty()) { fprintf(stderr, "sensevoice: %s has no sv.vocab\n", path.c_str()); return false; }
+    for (size_t i = 0; i < m.vocab.size(); i++)
+        if (m.vocab[i] == "<|EMO_UNKNOWN|>") m.emo_unk = (int)i;
 
     // [language, event, emotion, text-norm] query rows, as SenseVoiceSmall.inference builds them.
     const int qtok[4] = {lid, 1, 2, opts.itn ? 14 : 15};

@@ -3,7 +3,7 @@
 // utterance plus a stats line on stderr.
 //
 //   pipeline-cli --vad fsmn-vad.gguf -m sensevoice.gguf -a audio.wav [--frame-ms 10]
-//                [--language auto] [--no-itn] [--threads 4] [--end-sil 800]
+//                [--language auto] [--no-itn] [--ban-emo-unk] [--threads 4] [--end-sil 800]
 //                [--apm [--ns 0-4] [--no-agc] [--no-hpf]] [--hotwords hot.txt [--role ID]] [--wake-name NAME]
 #include "pipeline/pipeline.h"
 #include "asr/hotwords.h"
@@ -43,6 +43,7 @@ int main(int argc, char** argv) {
         else if (a == "--frame-ms") frame_ms = atoi(next());
         else if (a == "--language") opts.asr.language = next();
         else if (a == "--no-itn") opts.asr.itn = false;
+        else if (a == "--ban-emo-unk") opts.asr.ban_emo_unk = true;
         else if (a == "--threads") opts.asr.n_threads = atoi(next());
         else if (a == "--end-sil") opts.vad.max_end_silence_ms = atoi(next());
         else if (a == "--max-seg") opts.vad.max_single_segment_ms = atoi(next());
@@ -57,7 +58,7 @@ int main(int argc, char** argv) {
     }
     if (vad_path.empty() || asr_path.empty() || wav.empty() || frame_ms < 1) {
         fprintf(stderr, "usage: %s --vad fsmn-vad.gguf -m sensevoice.gguf -a audio.wav [--frame-ms N] "
-                        "[--language L] [--no-itn] [--threads N] [--end-sil MS] [--max-seg MS] "
+                        "[--language L] [--no-itn] [--ban-emo-unk] [--threads N] [--end-sil MS] [--max-seg MS] "
                         "[--apm [--ns 0-4] [--no-agc] [--no-hpf]] [--hotwords hot.txt [--role ID]] [--wake-name NAME]\n",
                 argv[0]);
         return 2;

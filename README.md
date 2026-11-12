@@ -32,7 +32,7 @@ Add the client from a [release](https://github.com/Momordicin/mintbot-voice-agen
 (replace the versions with those of the release you use):
 
 ```powershell
-pnpm add https://github.com/Momordicin/mintbot-voice-agent/releases/download/v0.1.1/mintbot-voice-agent-client-0.3.0.tgz
+pnpm add https://github.com/Momordicin/mintbot-voice-agent/releases/download/v0.3.0/mintbot-voice-agent-client-0.3.2.tgz
 ```
 
 Install the agent once, then keep it running:
@@ -41,7 +41,7 @@ Install the agent once, then keep it running:
 import path from "node:path";
 import { API_VERSION, installVoiceAgent, readInstallation, VoiceAgentSupervisor } from "@mintbot/voice-agent-client";
 
-const manifest = "https://github.com/Momordicin/mintbot-voice-agent/releases/download/v0.1.1/manifest.json";
+const manifest = "https://github.com/Momordicin/mintbot-voice-agent/releases/download/v0.3.0/manifest.json";
 const root = path.join(process.env.LOCALAPPDATA!, "MyApp", "voice-agent");      // where the agent is installed
 const voiceprint = path.join(process.env.APPDATA!, "MyApp", "voiceprint.json"); // user data: keep it outside root
 
@@ -71,8 +71,10 @@ enroll, call `voice.call("POST", "/v1/speaker/enroll/start")`, let the user
 speak five or more normal sentences (about 30 seconds), and once an
 `enroll_progress` event reports `ready: true` call
 `voice.call("POST", "/v1/speaker/enroll/commit")`. From then on, only the
-owner's speech is transcribed; `voice.call("DELETE", "/v1/speaker")` removes the
-voiceprint again.
+owner's words reach the app: other people's speech comes as a `speech_other`
+event without text, and coughs, sneezes, laughs, cries, breaths and applause
+come as events whoever makes them. `voice.call("DELETE", "/v1/speaker")` removes
+the voiceprint again.
 
 The options, events and error codes are documented in the comments of the
 client's TypeScript sources (`client/src/`, also shipped in the package; "go to
@@ -81,7 +83,8 @@ definition" in an editor opens them).
 ## Privacy
 
 Audio is processed in memory and never written to disk. The text results go
-only to the host app, and the voiceprint (biometric data) is stored only in the
+only to the host app; other people's speech is recognized in memory and its
+text is discarded. The voiceprint (biometric data) is stored only in the
 file the app chooses.
 
 ## Building from source

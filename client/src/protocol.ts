@@ -78,8 +78,8 @@ export interface SpeechOtherEvent extends SpeakerFields, TimingFields {
   start_ms: number;
   end_ms: number;
   end_unix_ms: number;
-  // only when it is a cough, sneeze, laugh, cry or breath (agent >= 0.3.0)
-  event?: "Cough" | "Sneeze" | "Laughter" | "Cry" | "Breath";
+  // only when it is a cough, sneeze, laugh, cry, breath or applause (agent >= 0.3.0)
+  event?: "Cough" | "Sneeze" | "Laughter" | "Cry" | "Breath" | "Applause";
   emotion?: string;
   asr_ms?: number; // agent >= 0.3.0
 }

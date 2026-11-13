@@ -31,6 +31,7 @@ struct DeviceIdentity {
                                // headset (playback, and capture over each Bluetooth profile)
     std::string display_name;  // the physical device's name ("Timekeeper的AirPods Pro"), or the
                                // endpoint name for devices built into the computer
+    bool raw_capture = false;  // opened in the raw processing mode: Windows audio enhancements bypassed
 };
 
 class AudioSource {
@@ -50,7 +51,9 @@ public:
 
 // device_index: index from list_capture_devices(), or -1 for the system default
 // (which follows default-device changes automatically on WASAPI).
-std::unique_ptr<AudioSource> make_capture_source(int device_index);
+// raw_capture: on WASAPI, open in the raw processing mode when the endpoint supports it,
+// so the endpoint's audio enhancements do not reach the pipeline.
+std::unique_ptr<AudioSource> make_capture_source(int device_index, bool raw_capture);
 std::unique_ptr<AudioSource> make_wav_source(const std::string& path, double speed);
 
 }  // namespace mintbot::agent

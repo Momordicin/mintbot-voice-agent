@@ -145,7 +145,7 @@ DeviceIdentity lookup_endpoint(const std::wstring& endpoint_id) {
 
 class CaptureSource : public AudioSource {
 public:
-    explicit CaptureSource(int index) : index_(index) {}
+    CaptureSource(int index, bool raw_capture) : index_(index), raw_capture_(raw_capture) {}
     ~CaptureSource() override { stop(); }
 
     bool start(PcmFn on_pcm, StateFn on_state, std::string* error) override {
@@ -162,6 +162,7 @@ public:
         cfg.dataCallback = &CaptureSource::on_data;
         cfg.notificationCallback = &CaptureSource::on_notification;
         cfg.pUserData = this;
+        cfg.wasapi.rawCapture = raw_capture_ ? MA_TRUE : MA_FALSE;  // patched miniaudio, see third_party/miniaudio/PATCHES.md
         if (index_ >= 0) {
             ma_device_info* infos = nullptr;
             ma_uint32 n = 0;
@@ -170,7 +171,14 @@ public:
             dev_id_ = infos[index_].id;
             cfg.capture.pDeviceID = &dev_id_;
         }
-        if (ma_result r = ma_device_init(&ctx_, &cfg, &dev_); r != MA_SUCCESS) return fail(error, "ma_device_init", r);
+        ma_result r = ma_device_init(&ctx_, &cfg, &dev_);
+        if (r != MA_SUCCESS && cfg.wasapi.rawCapture) {  // a driver that claims raw support but rejects it: open without
+            fprintf(stderr, "[voice-agent] capture: opening in the raw processing mode failed (%s), retrying without it\n",
+                    ma_result_description(r));
+            cfg.wasapi.rawCapture = MA_FALSE;
+            r = ma_device_init(&ctx_, &cfg, &dev_);
+        }
+        if (r != MA_SUCCESS) return fail(error, "ma_device_init", r);
         have_dev_ = true;
         refresh_identity();
         if (ma_result r = ma_device_start(&dev_); r != MA_SUCCESS) return fail(error, "ma_device_start", r);
@@ -213,7 +221,10 @@ private:
     void refresh_identity() {
         DeviceIdentity d;
 #ifdef _WIN32
-        if (dev_.pContext->backend == ma_backend_wasapi) d = lookup_endpoint(dev_.capture.id.wasapi);
+        if (dev_.pContext->backend == ma_backend_wasapi) {
+            d = lookup_endpoint(dev_.capture.id.wasapi);
+            d.raw_capture = dev_.wasapi.rawCaptureActive != 0;
+        }
 #endif
         if (d.name.empty()) {
             char nm[256] = {0};
@@ -221,6 +232,8 @@ private:
             d.name = nm;
         }
         if (d.display_name.empty()) d.display_name = d.name;
+        if (raw_capture_)
+            fprintf(stderr, "[voice-agent] capture: %s, raw processing mode %s\n", d.name.c_str(), d.raw_capture ? "on" : "off");
         std::lock_guard<std::mutex> lk(id_m_);
         identity_ = d;
     }
@@ -247,6 +260,7 @@ private:
 
 
     int index_;
+    bool raw_capture_;
     ma_context ctx_{};
     ma_device dev_{};
     ma_device_id dev_id_{};
@@ -301,7 +315,9 @@ private:
 
 }  // namespace
 
-std::unique_ptr<AudioSource> make_capture_source(int device_index) { return std::make_unique<CaptureSource>(device_index); }
+std::unique_ptr<AudioSource> make_capture_source(int device_index, bool raw_capture) {
+    return std::make_unique<CaptureSource>(device_index, raw_capture);
+}
 std::unique_ptr<AudioSource> make_wav_source(const std::string& path, double speed) {
     return std::make_unique<WavSource>(path, speed);
 }

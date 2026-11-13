@@ -18,6 +18,7 @@ struct AgentOptions {
     int watchdog_ms = 3000;         // restart the source after this long without audio
     int restart_backoff_ms = 2000;
     std::string record_path;        // raw (pre-APM) input as a 16 kHz WAV
+    bool raw_capture = true;        // WASAPI raw processing mode where the endpoint supports it (no audio enhancements)
     std::string speaker_model;      // empty: no speaker gate
     spk::SpeakerGateOptions speaker;
     int early_asr_ms = 200;         // run scoring + ASR after this much silence; 0 = off

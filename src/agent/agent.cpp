@@ -189,6 +189,7 @@ struct Agent::Impl {
             .str("device_id", d.device_id)
             .str("container_id", d.container_id)
             .str("display_name", d.display_name)
+            .boolean("raw_capture", d.raw_capture)
             .dump();
     }
 
@@ -227,7 +228,7 @@ struct Agent::Impl {
         uint64_t g = gen.load();
         std::unique_ptr<AudioSource> s;
         if (opts.source.rfind("wav:", 0) == 0) s = make_wav_source(opts.source.substr(4), opts.replay_speed);
-        else s = make_capture_source(device);
+        else s = make_capture_source(device, opts.raw_capture);
         bool ok = s->start([this, g](const float* p, size_t n) { on_pcm(g, p, n); },
                            [this, g](const std::string& st, const DeviceIdentity& d) { on_state(g, st, d); }, error);
         if (!ok) return false;
@@ -683,6 +684,7 @@ std::string Agent::status_json() {
         .str("device_id", dev.device_id)
         .str("container_id", dev.container_id)
         .str("display_name", dev.display_name)
+        .boolean("raw_capture", dev.raw_capture)
         .boolean("in_speech", m.in_speech)
         .num("stream_ms", m.stream_samples / 16)
         .num("dropped_ms", m.dropped_samples / 16)

@@ -105,6 +105,8 @@ void usage(const char* argv0) {
             "  --no-agc            disable AGC2\n"
             "  --no-hpf            disable the high-pass filter\n"
             "  --record FILE       write the raw input (before preprocessing) to a 16 kHz WAV\n"
+            "  --no-raw-capture    keep Windows audio enhancements (default: the raw processing mode where the\n"
+            "                      microphone supports it)\n"
             "  --spk-model FILE    CAM++ GGUF: enables the owner-speaker gate\n"
             "  --speaker-db FILE   voiceprint file (created on enrollment; without it the voiceprint is not kept)\n"
             "  --speaker-threshold X  cosine threshold for the owner (default 0.5)\n"
@@ -156,6 +158,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-agc") opts.pipe.apm.agc2 = false;
         else if (a == "--no-hpf") opts.pipe.apm.high_pass = false;
         else if (a == "--record") opts.record_path = next();
+        else if (a == "--no-raw-capture") opts.raw_capture = false;
         else if (a == "--spk-model") opts.speaker_model = next();
         else if (a == "--speaker-db") opts.speaker.db_path = next();
         else if (a == "--speaker-threshold" || a == "--speaker-short-floor") {

@@ -7144,6 +7144,7 @@ struct ma_device_config
         ma_bool8 noDefaultQualitySRC;       /* When set to true, disables the use of AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY. */
         ma_bool8 noAutoStreamRouting;       /* Disables automatic stream routing. */
         ma_bool8 noHardwareOffloading;      /* Disables WASAPI's hardware offloading feature. */
+        ma_bool8 rawCapture;                /* MINTBOT PATCH: capture opens in the raw processing mode (AUDCLNT_STREAMOPTIONS_RAW) when the endpoint supports it, skipping its audio enhancements. */
         ma_uint32 loopbackProcessID;        /* The process ID to include or exclude for loopback mode. Set to 0 to capture audio from all processes. Ignored when an explicit device ID is specified. */
         ma_bool8 loopbackProcessExclude;    /* When set to true, excludes the process specified by loopbackProcessID. By default, the process will be included. */
     } wasapi;
@@ -7894,6 +7895,8 @@ struct ma_device
             ma_bool8 noAutoConvertSRC;                              /* When set to true, disables the use of AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM. */
             ma_bool8 noDefaultQualitySRC;                           /* When set to true, disables the use of AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY. */
             ma_bool8 noHardwareOffloading;
+            ma_bool8 rawCapture;                                    /* MINTBOT PATCH: requested. */
+            ma_bool8 rawCaptureActive;                              /* MINTBOT PATCH: the capture stream was set to the raw processing mode. */
             ma_bool8 allowCaptureAutoStreamRouting;
             ma_bool8 allowPlaybackAutoStreamRouting;
             ma_bool8 isDetachedPlayback;
@@ -21765,6 +21768,7 @@ static MA_INLINE void ma_PropVariantInit(MA_PROPVARIANT* pProp)
 
 static const PROPERTYKEY MA_PKEY_Device_FriendlyName             = {{0xA45C254E, 0xDF1C, 0x4EFD, {0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0}}, 14};
 static const PROPERTYKEY MA_PKEY_AudioEngine_DeviceFormat        = {{0xF19F064D, 0x82C,  0x4E27, {0xBC, 0x73, 0x68, 0x82, 0xA1, 0xBB, 0x8E, 0x4C}},  0};
+static const PROPERTYKEY MA_PKEY_Devices_AudioDevice_RawProcessingSupported = {{0x8943B373, 0x388C, 0x4395, {0xB5, 0x57, 0xBC, 0x6D, 0xBA, 0xFF, 0xAF, 0xDB}}, 2};  /* MINTBOT PATCH */
 
 static const IID MA_IID_IUnknown                                 = {0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}; /* 00000000-0000-0000-C000-000000000046 */
 #if !defined(MA_WIN32_DESKTOP) && !defined(MA_WIN32_GDK)
@@ -23605,10 +23609,12 @@ typedef struct
     ma_bool32 noAutoConvertSRC;
     ma_bool32 noDefaultQualitySRC;
     ma_bool32 noHardwareOffloading;
+    ma_bool32 rawCapture;           /* MINTBOT PATCH */
     ma_uint32 loopbackProcessID;
     ma_bool32 loopbackProcessExclude;
 
     /* Output. */
+    ma_bool32 rawCaptureActive;     /* MINTBOT PATCH */
     ma_IAudioClient* pAudioClient;
     ma_IAudioRenderClient* pRenderClient;
     ma_IAudioCaptureClient* pCaptureClient;
@@ -23688,6 +23694,38 @@ static ma_result ma_device_init_internal__wasapi(ma_context* pContext, ma_device
             pAudioClient2->lpVtbl->Release(pAudioClient2);
         }
     }
+
+    /*
+    MINTBOT PATCH: raw capture. The raw processing mode bypasses the endpoint's enhancements, not its always-on driver or
+    hardware processing. It is requested only when the endpoint reports RawProcessingSupported (requesting it otherwise can
+    make Initialize fail), and before Initialize. If SetClientProperties fails the stream opens in the default mode.
+    */
+    pData->rawCaptureActive = MA_FALSE;
+#if defined(MA_WIN32_DESKTOP) || defined(MA_WIN32_GDK)
+    if (pData->rawCapture && deviceType == ma_device_type_capture && pDeviceInterface != NULL) {
+        ma_bool32 rawSupported = MA_FALSE;
+        ma_IPropertyStore* pRawStore = NULL;
+        if (SUCCEEDED(ma_IMMDevice_OpenPropertyStore(pDeviceInterface, STGM_READ, &pRawStore))) {
+            MA_PROPVARIANT rawProp;
+            ma_PropVariantInit(&rawProp);
+            if (SUCCEEDED(ma_IPropertyStore_GetValue(pRawStore, &MA_PKEY_Devices_AudioDevice_RawProcessingSupported, &rawProp))) {
+                rawSupported = (rawProp.vt == 11 /* VT_BOOL */ && *(const SHORT*)rawProp.pad != 0);    /* VARIANT_BOOL boolVal */
+                ma_PropVariantClear(pContext, &rawProp);
+            }
+            ma_IPropertyStore_Release(pRawStore);
+        }
+
+        if (rawSupported && SUCCEEDED(ma_IAudioClient_QueryInterface(pData->pAudioClient, &MA_IID_IAudioClient2, (void**)&pAudioClient2))) {
+            ma_AudioClientProperties clientProperties;
+            MA_ZERO_OBJECT(&clientProperties);
+            clientProperties.cbSize    = sizeof(clientProperties);
+            clientProperties.eCategory = MA_AudioCategory_Other;
+            clientProperties.Options   = MA_AUDCLNT_STREAMOPTIONS_RAW;
+            pData->rawCaptureActive = SUCCEEDED(ma_IAudioClient2_SetClientProperties(pAudioClient2, &clientProperties));
+            pAudioClient2->lpVtbl->Release(pAudioClient2);
+        }
+    }
+#endif
 
     /* Here is where we try to determine the best format to use with the device. If the client if wanting exclusive mode, first try finding the best format for that. If this fails, fall back to shared mode. */
     result = MA_FORMAT_NOT_SUPPORTED;
@@ -24173,6 +24211,7 @@ static ma_result ma_device_reinit__wasapi(ma_device* pDevice, ma_device_type dev
     data.noAutoConvertSRC           = pDevice->wasapi.noAutoConvertSRC;
     data.noDefaultQualitySRC        = pDevice->wasapi.noDefaultQualitySRC;
     data.noHardwareOffloading       = pDevice->wasapi.noHardwareOffloading;
+    data.rawCapture                 = pDevice->wasapi.rawCapture;   /* MINTBOT PATCH */
     data.loopbackProcessID          = pDevice->wasapi.loopbackProcessID;
     data.loopbackProcessExclude     = pDevice->wasapi.loopbackProcessExclude;
     result = ma_device_init_internal__wasapi(pDevice->pContext, deviceType, NULL, &data);
@@ -24184,6 +24223,7 @@ static ma_result ma_device_reinit__wasapi(ma_device* pDevice, ma_device_type dev
     if (deviceType == ma_device_type_capture || deviceType == ma_device_type_loopback) {
         pDevice->wasapi.pAudioClientCapture         = data.pAudioClient;
         pDevice->wasapi.pCaptureClient              = data.pCaptureClient;
+        pDevice->wasapi.rawCaptureActive            = (ma_bool8)data.rawCaptureActive;   /* MINTBOT PATCH */
 
         pDevice->capture.internalFormat             = data.formatOut;
         pDevice->capture.internalChannels           = data.channelsOut;
@@ -24242,6 +24282,7 @@ static ma_result ma_device_init__wasapi(ma_device* pDevice, const ma_device_conf
     pDevice->wasapi.noAutoConvertSRC       = pConfig->wasapi.noAutoConvertSRC;
     pDevice->wasapi.noDefaultQualitySRC    = pConfig->wasapi.noDefaultQualitySRC;
     pDevice->wasapi.noHardwareOffloading   = pConfig->wasapi.noHardwareOffloading;
+    pDevice->wasapi.rawCapture             = pConfig->wasapi.rawCapture;   /* MINTBOT PATCH */
     pDevice->wasapi.loopbackProcessID      = pConfig->wasapi.loopbackProcessID;
     pDevice->wasapi.loopbackProcessExclude = pConfig->wasapi.loopbackProcessExclude;
 
@@ -24264,6 +24305,7 @@ static ma_result ma_device_init__wasapi(ma_device* pDevice, const ma_device_conf
         data.noAutoConvertSRC           = pConfig->wasapi.noAutoConvertSRC;
         data.noDefaultQualitySRC        = pConfig->wasapi.noDefaultQualitySRC;
         data.noHardwareOffloading       = pConfig->wasapi.noHardwareOffloading;
+        data.rawCapture                 = pConfig->wasapi.rawCapture;   /* MINTBOT PATCH */
         data.loopbackProcessID          = pConfig->wasapi.loopbackProcessID;
         data.loopbackProcessExclude     = pConfig->wasapi.loopbackProcessExclude;
 
@@ -24274,6 +24316,7 @@ static ma_result ma_device_init__wasapi(ma_device* pDevice, const ma_device_conf
 
         pDevice->wasapi.pAudioClientCapture              = data.pAudioClient;
         pDevice->wasapi.pCaptureClient                   = data.pCaptureClient;
+        pDevice->wasapi.rawCaptureActive                 = (ma_bool8)data.rawCaptureActive;   /* MINTBOT PATCH */
         pDevice->wasapi.originalPeriodSizeInMilliseconds = pDescriptorCapture->periodSizeInMilliseconds;
         pDevice->wasapi.originalPeriodSizeInFrames       = pDescriptorCapture->periodSizeInFrames;
         pDevice->wasapi.originalPeriods                  = pDescriptorCapture->periodCount;
@@ -24330,6 +24373,7 @@ static ma_result ma_device_init__wasapi(ma_device* pDevice, const ma_device_conf
         data.noAutoConvertSRC           = pConfig->wasapi.noAutoConvertSRC;
         data.noDefaultQualitySRC        = pConfig->wasapi.noDefaultQualitySRC;
         data.noHardwareOffloading       = pConfig->wasapi.noHardwareOffloading;
+        data.rawCapture                 = MA_FALSE;   /* MINTBOT PATCH: capture only */
         data.loopbackProcessID          = pConfig->wasapi.loopbackProcessID;
         data.loopbackProcessExclude     = pConfig->wasapi.loopbackProcessExclude;
 

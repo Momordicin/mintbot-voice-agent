@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """One release, from a clean checkout: portable build -> models re-exported from the
-official weights (tools/models.lock.json) -> packages -> tests against those
+official weights (tools/models.lock.json; GGUFs already in build-models/out with the
+validated SHA-256, e.g. the previous release's, are kept) -> packages -> tests against those
 packages -> SHA256SUMS.txt and RELEASE_NOTES.md. Used by
 .github/workflows/release.yml and runnable locally (MSVC, Ninja, CMake, Node >= 22,
 Python with tools/requirements-release.txt):
@@ -154,8 +155,8 @@ def main():
     base = f"https://github.com/{repo}/releases/download/v{version}"
     notes = (changes + "\n\n" if changes else "") + f"""mintbot-voice-agent {version} (API {api}), models {manifest['packages']['models']['version']}, client {client_tgz[len('mintbot-voice-agent-client-'):-4]}
 
-Windows x64. Models rebuilt from the official ModelScope weights and verified byte-identical
-to the validated ones (tools/models.lock.json).
+Windows x64. Models verified byte-identical to the validated ones (tools/models.lock.json):
+rebuilt from the official ModelScope weights, or, when unchanged, taken from the previous release.
 
 Install from a Node.js (>= 22) project:
 

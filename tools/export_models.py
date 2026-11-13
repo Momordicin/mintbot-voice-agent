@@ -3,6 +3,9 @@
 tools/models.lock.json: downloads the original files (or takes them from
 --source), checks every SHA-256, fetches the pinned SenseVoice export scripts,
 converts, and checks that each GGUF is byte-identical to the validated one.
+A GGUF already in --out with the validated SHA-256 is kept and its originals are
+not downloaded (except the model holding the smoke-test WAV), so a release whose
+models did not change can start from the previous release's model files.
 
     python tools/export_models.py --out build-models
     python tools/export_models.py --out build-models --source asr=<dir with model.pt, am.mvn, ...>
@@ -69,14 +72,20 @@ def main():
     work = os.path.join(args.out, "_exporters")
     os.makedirs(work, exist_ok=True)
 
+    smoke = lock["smoke_wav"]
     model_dirs = {}
     for m in lock["models"]:
+        out = os.path.join(args.out, m["out"])
+        up_to_date = os.path.exists(out) and sha256(out) == m["out_sha256"]
+        # the originals are needed only to export, or for the smoke-test WAV they contain
+        if up_to_date and m["role"] != smoke["role"]:
+            print(f"{m['out']}: up to date")
+            continue
         src = sources.get(m["role"]) or download_originals(m, args.cache)
         for name, expected in m["files"].items():
             check(os.path.join(src, name), expected, f"{m['modelscope']}/{name}")
         model_dirs[m["role"]] = src
-        out = os.path.join(args.out, m["out"])
-        if os.path.exists(out) and sha256(out) == m["out_sha256"]:
+        if up_to_date:
             print(f"{m['out']}: up to date")
             continue
         script = exporter_script(m["exporter"], lock["exporters"][m["exporter"]], work)
@@ -87,7 +96,6 @@ def main():
         check(out, m["out_sha256"], m["out"])
         print(f"{m['out']}: identical to the validated model")
 
-    smoke = lock["smoke_wav"]
     print(os.path.join(model_dirs[smoke["role"]], smoke["file"]))
 
 

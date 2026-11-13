@@ -1,6 +1,7 @@
 # Builds a release on a clean Windows runner: portable binaries, models re-exported
-# from the official ModelScope weights (verified byte-identical, tools/models.lock.json),
-# packages, and the client tests against exactly those packages.
+# from the official ModelScope weights (verified byte-identical, tools/models.lock.json;
+# taken from the previous release when unchanged), packages, and the client tests
+# against exactly those packages.
 #   push a tag v<version> (= project VERSION in CMakeLists.txt) -> GitHub release with the files
 #   run manually (Actions -> release -> Run workflow)              -> the files as a build artifact
 name: release
@@ -41,6 +42,28 @@ jobs:
         with:
           path: build-models/modelscope
           key: modelscope-${{ hashFiles('tools/models.lock.json') }}
+
+      # Unchanged models (same models_version) are not downloaded and exported again: the
+      # latest release's GGUFs go where tools/export_models.py writes, and it keeps each one
+      # only if it has the validated SHA-256 (otherwise it exports from the official weights).
+      # Caches saved on a tag are not visible to the next tag, so the cache above rarely helps.
+      - name: Models of the previous release
+        shell: bash
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mv=$(python -c "import json; print(json.load(open('tools/models.lock.json'))['models_version'])")
+          zip="mintbot-voice-models-$mv.zip"
+          tmp=$(mktemp -d)
+          if gh release download --repo "$GITHUB_REPOSITORY" --pattern "$zip" --dir "$tmp"; then
+            mkdir -p build-models/out
+            python -c "import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); [z.extract(n, sys.argv[2]) for n in z.namelist() if n.endswith('.gguf') and '/' not in n]" "$tmp/$zip" build-models/out
+            ls -l build-models/out
+          else
+            echo "no $zip in the latest release: the models are exported from the official weights"
+          fi
 
       # PowerShell, not bash: Git Bash puts Git's GNU link.exe ahead of MSVC's linker on PATH
       - name: Build, export models, package, test

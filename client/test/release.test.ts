@@ -36,6 +36,8 @@ const skip = !manifest || !fs.existsSync(manifest) ? "no release found (run tool
 const wavSkip = fs.existsSync(wav) ? false : `no ${wav}`;
 if (required && (skip || wavSkip)) throw new Error(`MINTBOT_TEST_REQUIRE=1 but ${skip || wavSkip}`);
 const quiet = { info() {}, warn() {}, error() {} };
+// a release made before tools/tts_packages.json has no tts section
+const releaseTts = skip ? undefined : JSON.parse(fs.readFileSync(manifest!, "utf8")).tts;
 
 // Serves a release directory like github.com does: /<owner>/<repo>/releases/download/<tag>/<file>
 // answers 302 to a storage host path, and releases/latest/download/<file> 302s to the tag.
@@ -141,6 +143,11 @@ describe("release", { skip }, () => {
       await srv.close();
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  it("carries the GPT-SoVITS packages of tools/tts_packages.json",
+     { skip: !required && !releaseTts ? "release made before the tts section" : false }, () => {
+    assert.deepEqual(releaseTts, JSON.parse(fs.readFileSync(path.join(repo, "tools", "tts_packages.json"), "utf8")));
   });
 
   it("refuses a manifest with another API version", async () => {

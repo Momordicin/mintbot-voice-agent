@@ -7,7 +7,10 @@ Writes to <out>/<version>/:
   mintbot-voice-agent-<version>-win-x64.zip  executable, ggml DLLs, licenses
   mintbot-voice-models-<models-version>.zip  the three GGUF models, model licenses
   manifest.json                              versions, sizes and SHA-256 of both
-                                             archives and of every file inside
+                                             archives and of every file inside, and
+                                             the GPT-SoVITS packages the client's
+                                             speech-synthesis component installs
+                                             (`tts`, from tools/tts_packages.json)
   mintbot-voice-agent-client-<cv>.tgz        the Node.js client package (client/),
                                              built and packed with npm; the app
                                              depends on it (unless --no-client).
@@ -35,6 +38,7 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TTS_PACKAGES = os.path.join(ROOT, "tools", "tts_packages.json")
 
 MODELS = {  # role -> file name in --models
     "vad": "fsmn-vad.gguf",
@@ -75,6 +79,17 @@ def need(path):
 def agent_version(exe):
     out = subprocess.run([exe, "--version"], capture_output=True, check=True).stdout.decode()
     return json.loads(out)
+
+
+def tts_packages():
+    """tools/tts_packages.json: variant -> {url, file, size, sha256, date} of the official
+    GPT-SoVITS Windows package, copied into the manifest's `tts` section."""
+    with open(TTS_PACKAGES, encoding="utf-8") as f:
+        pins = json.load(f)
+    for variant in ("v2pro", "v5"):
+        if set(pins.get(variant, {})) != {"url", "file", "size", "sha256", "date"}:
+            sys.exit(f"{TTS_PACKAGES}: {variant} needs exactly url, file, size, sha256, date")
+    return pins
 
 
 def write_zip(path, entries):
@@ -178,6 +193,7 @@ def main():
         "entry": "mintbot-voice-agent.exe",
         "models": MODELS,
         "packages": pkgs,
+        "tts": tts_packages(),
     }
     with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=1)

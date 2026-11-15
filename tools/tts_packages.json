@@ -1,0 +1,16 @@
+{
+  "v2pro": {
+    "url": "https://huggingface.co/lj1995/GPT-SoVITS-windows-package/resolve/main/GPT-SoVITS-v2pro-20250604.7z",
+    "file": "GPT-SoVITS-v2pro-20250604.7z",
+    "size": 8185086602,
+    "sha256": "bd60d0796553ff05d8568136e199c13e0dc22ebe2ed24273134e34ed6f215cd6",
+    "date": "2025-06-04"
+  },
+  "v5": {
+    "url": "https://huggingface.co/lj1995/GPT-SoVITS-windows-package/resolve/main/GPT-SoVITS-v5-20261005.7z",
+    "file": "GPT-SoVITS-v5-20261005.7z",
+    "size": 10869111823,
+    "sha256": "2c1cd034af0e76854a8023d0f1fd6156ef2414bcfd5c88aae3309e1263e0fffe",
+    "date": "2026-10-05"
+  }
+}

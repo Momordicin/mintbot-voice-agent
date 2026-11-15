@@ -21,6 +21,7 @@ import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 
+import type { TtsPackageInfo, TtsVariant } from "./tts.ts";
 import { extractZip } from "./unzip.ts";
 
 const run = promisify(execFile);
@@ -45,6 +46,7 @@ export interface Manifest {
   entry: string;
   models: { vad: string; asr: string; speaker: string };
   packages: { agent: PackageInfo; models: PackageInfo };
+  tts?: Record<TtsVariant, TtsPackageInfo>; // GPT-SoVITS packages for the speech-synthesis component (tts.ts)
 }
 
 export interface Installation {
@@ -139,7 +141,7 @@ async function fetchOk(url: string, o: InstallOptions): Promise<Response> {
   return r;
 }
 
-async function readManifest(o: InstallOptions): Promise<Manifest> {
+export async function readManifest(o: InstallOptions): Promise<Manifest> {
   let text: string;
   if (isUrl(o.manifest)) {
     const r = await fetchOk(o.manifest, o);

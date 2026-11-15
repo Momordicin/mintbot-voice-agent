@@ -45,3 +45,15 @@ export type {
 } from "./install.ts";
 export { VoiceAgentSupervisor } from "./supervisor.ts";
 export type { Logger, SupervisorOptions, SupervisorPhase, SupervisorState } from "./supervisor.ts";
+export { createTtsManager, TtsError } from "./tts.ts";
+export type {
+  TtsErrorCode,
+  TtsInstallStatus,
+  TtsInstallTarget,
+  TtsLastDownload,
+  TtsManager,
+  TtsManagerOptions,
+  TtsPackageInfo,
+  TtsStatus,
+  TtsVariant,
+} from "./tts.ts";

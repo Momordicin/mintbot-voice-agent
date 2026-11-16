@@ -53,7 +53,10 @@ export type {
   TtsLastDownload,
   TtsManager,
   TtsManagerOptions,
+  TtsModel,
   TtsPackageInfo,
+  TtsServiceStatus,
   TtsStatus,
+  TtsSynthesisRequest,
   TtsVariant,
 } from "./tts.ts";

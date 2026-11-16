@@ -1,12 +1,15 @@
 // The GPT-SoVITS speech-synthesis component: install the official Windows package,
-// use a folder the user already has, report status, cancel, and update to the package
-// the release manifest pins. The app only calls these commands and shows status().
+// use a folder the user already has, report status, cancel, update to the package
+// the release manifest pins, run its service with a voice model and synthesize speech.
+// The app only calls these commands and shows status().
 //
 //   const tts = createTtsManager({ root, manifest, onState: (s) => show(s) });
 //   tts.install({ variant: "v2pro", root: ttsRoot }); // progress and outcome in status()
 //   await tts.useExisting(dir);                       // rejects with TtsError
 //   await tts.checkUpdate({ signal: AbortSignal.timeout(30_000) }); // reads the manifest: status().updateAvailable
 //   tts.cancel();
+//   tts.startService({ gptWeights, sovitsWeights }); // outcome in status().service
+//   const wav = await tts.synthesize({ text, textLang: "zh", refAudio, refText, promptLang: "zh" });
 //   await tts.dispose();                              // on app exit: cancels, ends child processes
 //
 // Package pins come from the manifest's `tts` section (tools/tts_packages.json). The
@@ -16,7 +19,9 @@
 // (runtime/python.exe api_v2.py), marked, and only then renamed to
 // <install root>/<file without .7z>. A final folder whose mark matches the pin is adopted
 // without downloading again. A folder chosen with useExisting() is test-run but never
-// written to.
+// written to. Every start of api_v2.py, test run or service, first rewrites <root>/tts-infer.yaml
+// (CUDA, half precision, v2; GPT-SoVITS falls back to CPU itself) and passes it with -c, so
+// GPT-SoVITS never changes the package's own config.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import * as path from "node:path";
@@ -26,7 +31,8 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 
 import { readManifest, VoiceInstallError } from "./install.ts";
 import { API_VERSION } from "./protocol.ts";
-import { ProcessFailure, probeTtsApi, sevenZipExtract, sevenZipUnpackedSize } from "./tts-process.ts";
+import { ProcessFailure, probeTtsApi, sevenZipExtract, sevenZipUnpackedSize, startTtsService, type TtsServiceProcess } from "./tts-process.ts";
+import { normalizeWavLoudness } from "./wav-loudness.ts";
 
 export type TtsVariant = "v2pro" | "v5";
 
@@ -50,6 +56,11 @@ export type TtsErrorCode =
   | "TTS_EXISTING_INVALID" // the chosen folder lacks files (details.missing)
   | "TTS_FAILED" // anything else (details.message)
   | "TTS_MANIFEST" // the manifest cannot be read (details.code, details.message) or has no package for the variant
+  | "TTS_NOT_INSTALLED" // startService() without an install
+  | "TTS_SERVICE" // the service cannot start, its port is in use, or it exited while running (details.message, details.stderr)
+  | "TTS_MODEL" // a weight endpoint answered non-200 (details.status, details.message, details.exception) or failed (details.message)
+  | "TTS_NOT_READY" // synthesize() while the service is not running or the model is not loaded
+  | "TTS_SYNTHESIS" // the synthesis endpoint answered non-200 (details.status, details.message, details.exception) or failed (details.message; details.abortReason when signal or the timeout ended it)
   | "TTS_DISPOSED"; // a command after dispose()
 
 export class TtsError extends Error {
@@ -87,6 +98,33 @@ export interface TtsLastDownload {
   errorDetails: Record<string, unknown>;
 }
 
+// Absolute paths of the GPT (.ckpt) and SoVITS (.pth) weights of one voice.
+export interface TtsModel {
+  gptWeights: string;
+  sovitsWeights: string;
+}
+
+// The service (api_v2.py on the port option). model: the last requested one. errorCode:
+// why state or modelState is "failed".
+export interface TtsServiceStatus {
+  state: "stopped" | "starting" | "running" | "failed";
+  model: TtsModel | null;
+  modelState: "none" | "loading" | "loaded" | "failed";
+  errorCode?: TtsErrorCode;
+  errorDetails?: Record<string, unknown>;
+}
+
+// textLang / promptLang: GPT-SoVITS language codes (e.g. "zh", "ja", "en"). refAudio:
+// absolute path of the reference audio; refText: what it says.
+export interface TtsSynthesisRequest {
+  text: string;
+  textLang: string;
+  refAudio: string;
+  refText: string;
+  promptLang: string;
+  signal?: AbortSignal;
+}
+
 export interface TtsStatus {
   installed: boolean;
   source: "download" | "existing" | null;
@@ -97,12 +135,13 @@ export interface TtsStatus {
   updateAvailable: boolean;
   install: TtsInstallStatus;
   lastDownload: TtsLastDownload | null;
+  service: TtsServiceStatus;
 }
 
 export interface TtsManagerOptions {
-  root: string; // the voice install root (see installVoiceAgent); holds tts.json
+  root: string; // the voice install root (see installVoiceAgent); holds tts.json and tts-infer.yaml
   manifest: string; // the release manifest, path or URL, as for installVoiceAgent
-  port?: number; // loopback port of the test run; default 18980
+  port?: number; // loopback port of the test run and the service; default 18980
   // every change of status(); during a download, verify or extract at most every 500 ms
   onState?: (s: TtsStatus) => void;
 }
@@ -112,18 +151,43 @@ export interface TtsManager {
   // Starts installing and returns at once; throws TtsError TTS_BUSY while busy. The
   // promise resolves when the install ends; its outcome is in status(). root: where
   // the package folder goes; default: the folder of the installed download, else <root>/tts.
+  // A starting or running service is stopped first and started again with its model when
+  // the install ends, however it ends.
   install(o: { variant: TtsVariant; root?: string }): Promise<void>;
   // Checks runtime/python.exe and api_v2.py, test-runs the folder and records it: true,
   // or false when cancelled. Rejects with TtsError (TTS_BUSY, TTS_EXISTING_INVALID,
-  // TTS_PROBE); the failure stays in status().install.
+  // TTS_PROBE); the failure stays in status().install. A starting or running service is
+  // stopped before the test run and started again with its model afterwards.
   useExisting(dir: string): Promise<boolean>;
+  // Starts the installed package's api_v2.py on the port option, waits until it answers
+  // (at most 300 s) and loads model; it keeps running until stopService() or dispose(). While
+  // starting or running: loadModel(model). During an install or test run it starts when that
+  // ends. Never rejects; the outcome is in status().service (TTS_NOT_INSTALLED, TTS_SERVICE,
+  // TTS_MODEL). An exit while running is "failed" with TTS_SERVICE and is not restarted.
+  startService(model: TtsModel | null): Promise<void>;
+  // Records model and, while running, loads its GPT then its SoVITS weights; null loads
+  // nothing and sets modelState "none". Loads run one at a time and the last call wins; an
+  // earlier one never overwrites a later one's status. While starting, the last recorded
+  // model is loaded once the service answers. Never rejects; the outcome is in status().service.
+  loadModel(model: TtsModel | null): Promise<void>;
+  // Ends the service's process tree: state "stopped", modelState "none".
+  stopService(): Promise<void>;
+  // Synthesizes text with the loaded model and resolves with WAV bytes. Rejects with TtsError
+  // TTS_NOT_READY unless the service is running with its model loaded, TTS_SYNTHESIS when the
+  // request fails, is aborted by signal or takes more than 120 s. An abort releases only the
+  // caller: GPT-SoVITS has no cancel endpoint, keeps computing, and later calls wait behind
+  // it. When GPT-SoVITS fails inside inference (e.g. out of GPU memory) it answers with 1 s
+  // of 16 kHz silence and success, so a resolved promise is not proof of real speech.
+  // The returned audio is normalized to -20 dBFS RMS with peaks at most -1 dBFS (silence unchanged).
+  synthesize(r: TtsSynthesisRequest): Promise<Buffer>;
   // Reads the manifest's pins again and recomputes status().updateAvailable (onState when
   // it changes). Rejects with TtsError TTS_MANIFEST when the manifest cannot be read or
   // signal aborts the read (details.abortReason: the reason's name, e.g. "TimeoutError" for
   // AbortSignal.timeout), TTS_DISPOSED when dispose() ends it; status is then unchanged.
   checkUpdate(o?: { signal?: AbortSignal }): Promise<void>;
   cancel(): void;
-  // Cancels, waits until the child processes have ended; later commands throw TTS_DISPOSED.
+  // Cancels, ends the service, waits until the child processes have ended; later commands
+  // throw TTS_DISPOSED.
   dispose(): Promise<void>;
 }
 
@@ -139,6 +203,9 @@ const MARKER_FILE = ".mintbot-install.json";
 const REQUIRED_FILES = [path.join("runtime", "python.exe"), "api_v2.py"];
 const NOTIFY_INTERVAL_MS = 500;
 const DEFAULT_PORT = 18980;
+const SYNTHESIS_TIMEOUT_MS = 120_000;
+const INFER_CONFIG_FILE = "tts-infer.yaml";
+const INFER_CONFIG = "custom:\n  device: cuda\n  is_half: true\n  version: v2\n";
 
 class InstallFailure extends Error {
   readonly code: TtsErrorCode;
@@ -208,6 +275,7 @@ async function extractedContentDir(extractDir: string): Promise<string> {
 
 export function createTtsManager(o: TtsManagerOptions): TtsManager {
   const recordPath = path.join(o.root, RECORD_FILE);
+  const inferConfigPath = path.resolve(o.root, INFER_CONFIG_FILE);
   const port = o.port ?? DEFAULT_PORT;
   let record = readRecord(recordPath);
   let installed = detectInstalled(record);
@@ -221,6 +289,14 @@ export function createTtsManager(o: TtsManagerOptions): TtsManager {
   const lifetime = new AbortController(); // ends a checkUpdate() in progress on dispose()
   let checking: Promise<unknown> = Promise.resolve();
   let lastNotifyAt = 0;
+  let service: TtsServiceStatus = { state: "stopped", model: null, modelState: "none" };
+  let proc: TtsServiceProcess | null = null;
+  let serviceAbort: AbortController | null = null;
+  let serviceTask: Promise<void> = Promise.resolve();
+  let halting: Promise<void> = Promise.resolve();
+  let resumeAfterInstall = false;
+  let modelSeq = 0;
+  let modelChain: Promise<void> = Promise.resolve();
 
   function status(): TtsStatus {
     const pin = record?.variant ? pins?.[record.variant] : undefined;
@@ -232,6 +308,7 @@ export function createTtsManager(o: TtsManagerOptions): TtsManager {
       updateAvailable: installed && record?.source === "download" && pin !== undefined && pin.sha256 !== record.sha256,
       install: { ...install },
       lastDownload,
+      service: { ...service },
     };
   }
 
@@ -260,6 +337,12 @@ export function createTtsManager(o: TtsManagerOptions): TtsManager {
     } catch {
       return path.relative(path.resolve(a).toLowerCase(), path.resolve(b).toLowerCase()) === "";
     }
+  }
+
+  async function writeInferConfig(): Promise<string> {
+    await fs.promises.mkdir(o.root, { recursive: true });
+    await fs.promises.writeFile(inferConfigPath, INFER_CONFIG);
+    return inferConfigPath;
   }
 
   async function saveRecord(next: TtsRecord): Promise<void> {
@@ -406,7 +489,7 @@ export function createTtsManager(o: TtsManagerOptions): TtsManager {
 
         setProgress("probe");
         try {
-          await probeTtsApi(contentDir, port, signal);
+          await probeTtsApi(contentDir, await writeInferConfig(), port, signal);
         } catch (err) {
           if (signal.aborted) throw err;
           throw new InstallFailure("TTS_PROBE", { message: message(err), stderr: err instanceof ProcessFailure ? err.stderr : [] });
@@ -445,7 +528,14 @@ export function createTtsManager(o: TtsManagerOptions): TtsManager {
     lastDownload = null;
     install = { state: "installing", ...activeAction, phase: "checking" };
     notify();
-    const run = runInstall(variant, resolved, controller.signal).catch(() => {});
+    const run = (async () => {
+      await pauseService();
+      try {
+        await runInstall(variant, resolved, controller.signal);
+      } finally {
+        resumeService();
+      }
+    })().catch(() => {});
     task = run;
     return run;
   }
@@ -466,9 +556,10 @@ export function createTtsManager(o: TtsManagerOptions): TtsManager {
     const run = (async () => {
       setProgress("probe");
       let outcome: TtsInstallStatus = { state: "idle" };
+      await pauseService();
       try {
         try {
-          await probeTtsApi(resolved, port, controller.signal);
+          await probeTtsApi(resolved, await writeInferConfig(), port, controller.signal);
         } catch (err) {
           if (controller.signal.aborted) return false;
           const details = { message: message(err), stderr: err instanceof ProcessFailure ? err.stderr : [] };
@@ -488,6 +579,7 @@ export function createTtsManager(o: TtsManagerOptions): TtsManager {
         abort = null;
         install = outcome;
         notify();
+        resumeService();
       }
     })();
     task = run.catch(() => {});
@@ -519,17 +611,206 @@ export function createTtsManager(o: TtsManagerOptions): TtsManager {
     abort?.abort();
   }
 
+  function haltService(): Promise<void> {
+    serviceAbort?.abort();
+    serviceAbort = null;
+    const current = proc;
+    proc = null;
+    halting = Promise.all([halting, current?.stop(), serviceTask]).then(() => {});
+    return halting;
+  }
+
+  function setStopped(): Promise<void> {
+    const done = haltService();
+    service = { state: "stopped", model: service.model, modelState: "none" };
+    notify();
+    return done;
+  }
+
+  async function pauseService(): Promise<void> {
+    if (service.state !== "starting" && service.state !== "running") {
+      await halting;
+      return;
+    }
+    resumeAfterInstall = true;
+    await setStopped();
+  }
+
+  function resumeService(): void {
+    if (!resumeAfterInstall || disposed) return;
+    resumeAfterInstall = false;
+    spawnService();
+  }
+
+  async function setWeights(url: string, endpoint: string, weightsPath: string, signal: AbortSignal): Promise<void> {
+    let response: Response;
+    try {
+      response = await fetch(`${url}${endpoint}?weights_path=${encodeURIComponent(weightsPath)}`, { signal });
+    } catch (err) {
+      throw new TtsError("TTS_MODEL", { message: message(err) });
+    }
+    if (response.status === 200) {
+      await response.body?.cancel();
+      return;
+    }
+    const body = await response.json().catch(() => ({}));
+    throw new TtsError("TTS_MODEL", { status: response.status, message: body.message, exception: body.Exception });
+  }
+
+  async function applyModel(seq: number): Promise<void> {
+    const current = proc;
+    if (seq !== modelSeq || current === null || serviceAbort === null) return;
+    const signal = serviceAbort.signal;
+    const model = service.model;
+    if (model === null) {
+      service = { state: "running", model, modelState: "none" };
+      notify();
+      return;
+    }
+    service = { state: "running", model, modelState: "loading" };
+    notify();
+    let failure: TtsError | null = null;
+    try {
+      await setWeights(current.url, "set_gpt_weights", model.gptWeights, signal);
+      await setWeights(current.url, "set_sovits_weights", model.sovitsWeights, signal);
+    } catch (err) {
+      failure = err instanceof TtsError ? err : new TtsError("TTS_MODEL", { message: message(err) });
+    }
+    if (seq !== modelSeq || proc !== current) return;
+    service = failure
+      ? { state: "running", model, modelState: "failed", errorCode: failure.code, errorDetails: failure.details }
+      : { state: "running", model, modelState: "loaded" };
+    notify();
+  }
+
+  function requestLoad(): Promise<void> {
+    const seq = ++modelSeq;
+    const run = modelChain.then(() => applyModel(seq));
+    modelChain = run;
+    return run;
+  }
+
+  function spawnService(): Promise<void> {
+    if (!installed || record === null) {
+      service = { state: "failed", model: service.model, modelState: "none", errorCode: "TTS_NOT_INSTALLED", errorDetails: {} };
+      notify();
+      return Promise.resolve();
+    }
+    const dir = record.dir;
+    const controller = new AbortController();
+    serviceAbort = controller;
+    service = { state: "starting", model: service.model, modelState: "none" };
+    notify();
+    const previous = halting;
+    const run = (async () => {
+      await previous;
+      let started: TtsServiceProcess;
+      try {
+        started = await startTtsService(dir, await writeInferConfig(), port, controller.signal);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        serviceAbort = null;
+        service = { state: "failed", model: service.model, modelState: "none", errorCode: "TTS_SERVICE",
+                    errorDetails: { message: message(err), stderr: err instanceof ProcessFailure ? err.stderr : [] } };
+        notify();
+        return;
+      }
+      if (controller.signal.aborted) {
+        await started.stop();
+        return;
+      }
+      proc = started;
+      service = { state: "running", model: service.model, modelState: "none" };
+      notify();
+      started.exited.then((exitMessage) => {
+        if (proc !== started) return;
+        proc = null;
+        serviceAbort?.abort();
+        serviceAbort = null;
+        service = { state: "failed", model: service.model, modelState: "none", errorCode: "TTS_SERVICE",
+                    errorDetails: { message: exitMessage, stderr: [...started.stderr] } };
+        notify();
+      });
+      await requestLoad();
+    })();
+    serviceTask = run;
+    return run;
+  }
+
+  function loadModel(model: TtsModel | null): Promise<void> {
+    if (disposed) throw new TtsError("TTS_DISPOSED");
+    if (service.state === "running") {
+      service = { state: "running", model, modelState: model === null ? "none" : "loading" };
+      notify();
+      return requestLoad();
+    }
+    service = { ...service, model };
+    notify();
+    return service.state === "starting" ? serviceTask : Promise.resolve();
+  }
+
+  function startService(model: TtsModel | null): Promise<void> {
+    if (disposed) throw new TtsError("TTS_DISPOSED");
+    if (service.state === "starting" || service.state === "running") return loadModel(model);
+    service = { ...service, model };
+    if (install.state === "installing") {
+      resumeAfterInstall = true;
+      notify();
+      return Promise.resolve();
+    }
+    return spawnService();
+  }
+
+  function stopService(): Promise<void> {
+    if (disposed) throw new TtsError("TTS_DISPOSED");
+    resumeAfterInstall = false;
+    return setStopped();
+  }
+
+  async function synthesize(r: TtsSynthesisRequest): Promise<Buffer> {
+    if (disposed) throw new TtsError("TTS_DISPOSED");
+    const current = proc;
+    if (current === null || service.modelState !== "loaded") throw new TtsError("TTS_NOT_READY");
+    const timeout = AbortSignal.timeout(SYNTHESIS_TIMEOUT_MS);
+    const signal = r.signal ? AbortSignal.any([r.signal, timeout]) : timeout;
+    let response: Response;
+    try {
+      response = await fetch(`${current.url}tts`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: r.text, text_lang: r.textLang, ref_audio_path: r.refAudio, prompt_text: r.refText,
+                               prompt_lang: r.promptLang, media_type: "wav", streaming_mode: false }),
+        signal,
+      });
+      if (response.status === 200) return normalizeWavLoudness(Buffer.from(await response.arrayBuffer()));
+    } catch (err) {
+      const details: Record<string, unknown> = { message: message(err) };
+      if (signal.aborted) {
+        const reason: unknown = signal.reason;
+        details.abortReason = reason instanceof Error ? reason.name : String(reason);
+      }
+      throw new TtsError("TTS_SYNTHESIS", details);
+    }
+    const body = await response.json().catch(() => ({}));
+    throw new TtsError("TTS_SYNTHESIS", { status: response.status, message: body.message, exception: body.Exception });
+  }
+
   return {
     status,
     install: startInstall,
     useExisting,
     checkUpdate,
     cancel,
+    startService,
+    loadModel,
+    stopService,
+    synthesize,
     async dispose() {
       disposed = true;
       lifetime.abort();
       cancel();
-      await Promise.all([checking, task]);
+      if (service.state === "starting" || service.state === "running") await setStopped();
+      await Promise.all([checking, task, halting]);
     },
   };
 }

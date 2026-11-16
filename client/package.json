@@ -1,6 +1,6 @@
 {
   "name": "@mintbot/voice-agent-client",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Install, start, supervise and talk to mintbot-voice-agent from a Node.js core",
   "license": "MIT",
   "type": "module",

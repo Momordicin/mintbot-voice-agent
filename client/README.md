@@ -26,6 +26,8 @@ const tts = createTtsManager({ root, manifest, onState });
 tts.install({ variant: "v2pro", root: ttsRoot }); // progress in tts.status()
 await tts.useExisting(dir); // a GPT-SoVITS folder the user already has
 await tts.checkUpdate({ signal });
+await tts.startService({ gptWeights, sovitsWeights }); // outcome in tts.status().service
+const wav = await tts.synthesize({ text, textLang: "zh", refAudio, refText, promptLang: "zh" });
 await tts.dispose();
 ```
 

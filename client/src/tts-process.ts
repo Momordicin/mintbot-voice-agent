@@ -1,8 +1,10 @@
-// Child processes used while installing the GPT-SoVITS speech-synthesis component
-// (tts.ts): 7za (7zip-bin) lists the unpacked size of an archive and extracts it, and
-// a probe starts the package's runtime/python.exe api_v2.py on a loopback port, waits
-// until it answers HTTP, then ends its process tree. Failures are ProcessFailure, with
-// the last lines the process wrote to stderr.
+// Child processes of the GPT-SoVITS speech-synthesis component (tts.ts): 7za (7zip-bin)
+// lists the unpacked size of an archive and extracts it; the service starts the package's
+// runtime/python.exe api_v2.py on a loopback port and waits until it answers HTTP, and a
+// probe does the same, then ends its process tree. api_v2.py is started with -c and the
+// config file the caller passes, so it never reads or rewrites the package's own
+// GPT_SoVITS/configs/tts_infer.yaml. Failures are ProcessFailure, with the last lines the
+// process wrote to stderr.
 import { spawn, type ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -117,23 +119,42 @@ async function answersHttp(url: string, signal?: AbortSignal): Promise<boolean> 
   }
 }
 
-// Starts <dir>/runtime/python.exe api_v2.py on 127.0.0.1:port and resolves once it
-// answers HTTP (at most 300 s); the process tree is ended either way. Fails at once
-// when something already answers on the port.
-export async function probeTtsApi(dir: string, port: number, signal: AbortSignal): Promise<void> {
+// A running api_v2.py. stderr: its last error output lines, kept up to date. exited:
+// resolves with a message when the process has ended and its stderr is closed (the tail is
+// complete). stop(): ends its process tree.
+export interface TtsServiceProcess {
+  url: string;
+  stderr: string[];
+  exited: Promise<string>;
+  stop(): Promise<void>;
+}
+
+// Starts <dir>/runtime/python.exe api_v2.py -c <config> on 127.0.0.1:port and resolves once
+// it answers HTTP (at most 300 s); on failure or abort the process tree is ended. Fails at
+// once when something already answers on the port. config: absolute path of the YAML file
+// api_v2.py reads and writes instead of the package's own.
+export async function startTtsService(dir: string, config: string, port: number, signal: AbortSignal): Promise<TtsServiceProcess> {
   const url = `http://${HOST}:${port}/`;
   if (await answersHttp(url, signal)) throw new ProcessFailure(`port ${port} is already in use`, []);
   signal.throwIfAborted();
-  const child = spawn(path.join(dir, "runtime", "python.exe"), ["api_v2.py", "-a", HOST, "-p", String(port)],
+  const child = spawn(path.join(dir, "runtime", "python.exe"), ["api_v2.py", "-a", HOST, "-p", String(port), "-c", config],
                       { cwd: dir, windowsHide: true, stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, PYTHONIOENCODING: "utf-8" } });
   const stderr: string[] = [];
   collectTail(child.stderr, stderr);
   let exitMessage: string | null = null;
+  let onExit: (message: string) => void = () => {};
+  const exited = new Promise<string>((resolve) => {
+    onExit = resolve;
+  });
   child.once("exit", (code) => {
     exitMessage = `api_v2.py exited with code ${code}`;
   });
+  child.once("close", (code) => {
+    onExit(exitMessage ?? `api_v2.py exited with code ${code}`);
+  });
   child.once("error", (err) => {
     exitMessage = `api_v2.py failed to start: ${err.message}`;
+    onExit(exitMessage);
   });
   const deadline = Date.now() + PROBE_TIMEOUT_MS;
   try {
@@ -143,11 +164,18 @@ export async function probeTtsApi(dir: string, port: number, signal: AbortSignal
       if (Date.now() > deadline) throw new ProcessFailure(`api_v2.py did not answer within ${PROBE_TIMEOUT_MS / 1000} s`, stderr);
       if (await answersHttp(url, signal)) {
         if (exitMessage !== null) throw new ProcessFailure(exitMessage, stderr);
-        return;
+        return { url, stderr, exited, stop: () => killTree(child) };
       }
       await sleep(PROBE_POLL_MS, undefined, { signal });
     }
-  } finally {
+  } catch (err) {
     await killTree(child);
+    throw err;
   }
+}
+
+// The test run: startTtsService(), then its process tree is ended.
+export async function probeTtsApi(dir: string, config: string, port: number, signal: AbortSignal): Promise<void> {
+  const service = await startTtsService(dir, config, port, signal);
+  await service.stop();
 }

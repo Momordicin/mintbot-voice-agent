@@ -7,7 +7,7 @@ export const API_VERSION = 1;
 export interface AgentEvent {
   id: number;
   // status | speech_start | speech_end | final | command | speech_other | device | capture | error |
-  // enroll_progress | enroll_failed | speaker, plus "snapshot" from the supervisor (see VoiceAgentSupervisor)
+  // enroll_progress | enroll_failed | speaker | playback, plus "snapshot" from the supervisor (see VoiceAgentSupervisor)
   type: string;
   data: any;
 }
@@ -162,6 +162,30 @@ export interface HotwordsReloadError {
   error: string;
   code: "no_path" | "file_unreadable" | "not_utf8";
   hotwords?: HotwordsStatus; // absent when path or role was not UTF-8
+}
+
+// `playback` event (agents with playback): one per state of each clip queued with POST /v1/play.
+// An event for an id can arrive before POST /v1/play answers with that id: keep the events
+// of ids not known yet. Ids belong to one agent process and start at 1 in each; when the
+// agent exits, its outstanding clips may end without an event (an agent shutdown can still
+// send "stopped" for them before the event stream closes). Events reach connected streams
+// only: until the first `status` event of an event connection, playback events may have
+// been missed, and that status gives counts (PlaybackStatus), not ids.
+export interface PlaybackEvent {
+  // start: its first sample went to the output device; end: its last one did;
+  // stopped: POST /v1/playback/stop, the agent's shutdown, or an output device problem ended
+  // it. An `error` event with code "playback_failed" is sent when a playing clip is cut
+  // because the device stopped and did not come back within 2 s, or when the device cannot
+  // be opened for queued clips
+  state: "start" | "end" | "stopped";
+  id: number; // the answer of POST /v1/play
+}
+
+// `playback` in GET /v1/status, and the answer of POST /v1/playback/stop (agents with playback).
+// Counts only: which ids are playing or queued is known from the events alone.
+export interface PlaybackStatus {
+  playing: boolean; // a clip has started and not ended
+  queued: number; // clips not started yet
 }
 
 // Error codes of POST /v1/listen/start and of `capture` events.

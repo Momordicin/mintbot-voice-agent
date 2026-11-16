@@ -1,7 +1,8 @@
 // Stand-in for mintbot-voice-agent.exe in the supervisor tests: same ready line,
 // token check, endpoints and stdin-EOF exit, with failures chosen by env:
 //   FAKE_STATE        file counting launches (shared by all processes of one test)
-//   FAKE_LOG          JSON lines: {launch, args} per start, {launch, req} per request
+//   FAKE_LOG          JSON lines: {launch, args} per start, {launch, req} per request,
+//                     {launch, play: {rate, type, pcm (base64)}} per POST /v1/play
 //   FAKE_EXIT         exit with this code before the ready line
 //   FAKE_CRASH_RUNS   the first N launches crash (exit 3) FAKE_CRASH_MS after ready
 //   FAKE_MIC_DENIED   the first N listen/start calls of each process fail (mic_access_denied)
@@ -25,6 +26,7 @@ if (!env.MINTBOT_VOICE_TOKEN) process.exit(1);
 let micDenied = Number(env.FAKE_MIC_DENIED ?? 0);
 let dropFirstSse = env.FAKE_SSE_DROP === "1";
 let listening = false;
+let lastPlayId = 0;
 const clients = new Set();
 const send = (res, type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
 const broadcast = (type, data) => clients.forEach((c) => send(c, type, data));
@@ -56,6 +58,24 @@ const server = http.createServer((req, res) => {
     listening = false;
     json(res, 200, { listening });
     if (was) broadcast("capture", { state: "stopped", code: "", message: "" });
+    return;
+  }
+  if (req.method === "POST" && req.url.startsWith("/v1/play?")) {
+    // like the agent: the clip is queued and starts at once on an idle device
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const rate = Number(new URL(req.url, "http://x").searchParams.get("rate"));
+      log({ play: { rate, type: req.headers["content-type"], pcm: Buffer.concat(chunks).toString("base64") } });
+      const id = ++lastPlayId;
+      json(res, 200, { id });
+      broadcast("playback", { state: "start", id });
+    });
+    return;
+  }
+  if (req.method === "POST" && req.url === "/v1/playback/stop") {
+    json(res, 200, { playing: false, queued: 0 });
+    if (lastPlayId) broadcast("playback", { state: "stopped", id: lastPlayId });
     return;
   }
   if (req.method === "POST" && req.url === "/v1/shutdown") {

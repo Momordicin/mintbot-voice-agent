@@ -2,6 +2,7 @@
 
 #include "agent/audio_source.h"
 #include "agent/json.h"
+#include "agent/player.h"
 #include "asr/hotwords.h"
 #include "common/wav_io.h"
 #include "dsp/apm.h"
@@ -142,8 +143,9 @@ struct Agent::Impl {
     std::atomic<bool> in_speech{false};
     std::atomic<int64_t> utterances{0};
     int64_t started_steady_ms = steady_ms();
+    Player player;
 
-    explicit Impl(EventHub& h) : hub(h) {}
+    explicit Impl(EventHub& h) : hub(h), player(h) {}
 
     void publish_error(const std::string& msg) { hub.publish("error", JsonObject().str("message", msg).dump()); }
 
@@ -706,6 +708,7 @@ std::string Agent::status_json() {
                             .num("early_used", m.busy_early_used_us.load() / 1000)
                             .num("early_wasted", (m.busy_early_us.load() - m.busy_early_used_us.load()) / 1000)
                             .dump())
+        .raw("playback", m.player.status_json())
         .num("restarts", (int64_t)m.restarts.load())
         .num("subscribers", (int64_t)m.hub.subscribers())
         .num("uptime_s", (steady_ms() - m.started_steady_ms) / 1000)
@@ -771,8 +774,15 @@ std::string Agent::hotwords_json() {
         .dump();
 }
 
+uint64_t Agent::play(int rate, std::vector<int16_t> pcm) { return p_->player.enqueue(rate, std::move(pcm)); }
+
+void Agent::stop_playback() { p_->player.stop(); }
+
+std::string Agent::playback_json() { return p_->player.status_json(); }
+
 void Agent::shutdown() {
     Impl& m = *p_;
+    m.player.shutdown();
     {
         std::lock_guard<std::mutex> lk(m.src_m);
         m.listening = false;

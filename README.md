@@ -63,6 +63,9 @@ await voice.start();      // starts listening right away
 voice.setListening(false); // releases the microphone (stays off across restarts)
 voice.setListening(true);
 
+const id = await voice.play(wav); // a PCM 16-bit mono WAV on the default output device, after the clips before it
+await voice.stopPlayback();       // stops it and drops the queued clips
+
 await voice.stop();       // on app exit; the agent also exits by itself if the app dies
 ```
 

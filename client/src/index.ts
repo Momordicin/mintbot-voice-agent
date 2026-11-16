@@ -9,6 +9,8 @@
 //   });
 //   await voice.start();
 //   voice.setListening(false); // the microphone is released and stays off across restarts until setListening(true)
+//   const id = await voice.play(wav); // PCM 16-bit mono WAV, after the clips queued before it; `playback` events by id
+//   await voice.stopPlayback();
 //   ...
 //   await voice.stop();
 export { API_VERSION, AgentHttpError } from "./protocol.ts";
@@ -25,6 +27,8 @@ export type {
   HotwordsReloadError,
   HotwordsReloadReply,
   HotwordsStatus,
+  PlaybackEvent,
+  PlaybackStatus,
   ReadyLine,
   SpeakerFields,
   SpeakerStatus,
@@ -43,8 +47,8 @@ export type {
   PackageInfo,
   ReadInstallationOptions,
 } from "./install.ts";
-export { VoiceAgentSupervisor } from "./supervisor.ts";
-export type { Logger, SupervisorOptions, SupervisorPhase, SupervisorState } from "./supervisor.ts";
+export { PlaybackError, VoiceAgentSupervisor } from "./supervisor.ts";
+export type { Logger, PlaybackErrorCode, SupervisorOptions, SupervisorPhase, SupervisorState } from "./supervisor.ts";
 export { createTtsManager, TtsError } from "./tts.ts";
 export type {
   TtsErrorCode,

@@ -3,10 +3,12 @@
 // growing delay; retry listening while the microphone is unavailable; reconnect
 // the event stream and read a status snapshot when it drops. setListening()
 // switches the microphone on and off for good: no restart, retry or reconnect
-// opens it while listening is not wanted.
+// opens it while listening is not wanted. play() / stopPlayback() speak through the
+// agent on the system default output device.
 import { startAgentProcess, type AgentProcess } from "./agent.ts";
 import type { Installation } from "./install.ts";
 import { API_VERSION, AgentHttpError, type AgentEvent } from "./protocol.ts";
+import { parseWav } from "./wav-loudness.ts";
 
 export type SupervisorPhase =
   | "stopped" // not started, or stop() completed
@@ -65,6 +67,21 @@ const consoleLog: Logger = {
   warn: (m) => console.warn(`[VoiceAgent] ${m}`),
   error: (m) => console.error(`[VoiceAgent] ${m}`),
 };
+
+export type PlaybackErrorCode =
+  | "PLAYBACK_UNSUPPORTED_WAV" // not a PCM 16-bit mono RIFF/WAVE with a data chunk (details.format, channels, bits when known)
+  | "PLAYBACK_NOT_RUNNING"; // play() while the agent is not running or stop() has begun (details.phase)
+
+export class PlaybackError extends Error {
+  readonly code: PlaybackErrorCode;
+  readonly details: Record<string, unknown>;
+  constructor(code: PlaybackErrorCode, details: Record<string, unknown> = {}) {
+    super(code);
+    this.name = "PlaybackError";
+    this.code = code;
+    this.details = details;
+  }
+}
 
 // Exit code of the agent for invalid command-line arguments: restarting cannot help.
 const EXIT_BAD_ARGS = 2;
@@ -159,6 +176,39 @@ export class VoiceAgentSupervisor {
   async call<T = any>(method: "GET" | "POST" | "DELETE", path: string): Promise<T> {
     if (!this.agent || this.s.phase !== "running") throw new Error(`voice agent is ${this.s.phase}`);
     return this.agent.call<T>(method, path);
+  }
+
+  // Queues a WAV (PCM 16-bit, mono, 8000-48000 Hz, up to 60 s) for playback on the system
+  // default output device, after the clips queued before it; resolves with its id once queued.
+  // `playback` events report its start, end or stop by that id, and can arrive before play()
+  // resolves with it: keep the events of ids not known yet. Ids belong to one agent process:
+  // once the phase leaves "running" (crash, restart, stop()) the outstanding clips end without
+  // events and the next process counts from 1 again. Playback events are best-effort until the
+  // first `status` event of each event connection; a "snapshot" gives counts only. Await each
+  // play() before the next, and let a play() in flight settle before stopPlayback(); otherwise
+  // the order is not guaranteed. Rejects with PlaybackError (PLAYBACK_NOT_RUNNING as soon as
+  // stop() has begun, though the phase reads "running" until it finishes); AgentHttpError
+  // when the agent refuses the clip (400 rate or samples invalid, 413 too long, 404 from an
+  // agent without playback); a network TypeError when the agent exits or is stopped during
+  // the request.
+  async play(wav: Buffer): Promise<number> {
+    const info = parseWav(wav);
+    const fmt = info?.fmt;
+    if (!info || !fmt || fmt.format !== 1 || fmt.bits !== 16 || fmt.channels !== 1 || info.dataStart < 0)
+      throw new PlaybackError("PLAYBACK_UNSUPPORTED_WAV", fmt ? { format: fmt.format, channels: fmt.channels, bits: fmt.bits } : {});
+    if (!this.agent || this.s.phase !== "running") throw new PlaybackError("PLAYBACK_NOT_RUNNING", { phase: this.s.phase });
+    const pcm = new Uint8Array(wav.subarray(info.dataStart, info.dataStart + info.dataSize - (info.dataSize & 1)));
+    const reply = await this.agent.call<{ id: number }>("POST", `/v1/play?rate=${fmt.sampleRate}`, pcm);
+    return reply.id;
+  }
+
+  // Stops the clip being played and drops the queued ones (`stopped` events). Nothing to do
+  // while the agent is not running: it plays nothing then. A play() still in flight may queue
+  // its clip after the stop: let it settle first. Rejects with AgentHttpError (404 from an agent
+  // without playback); a network TypeError when the agent exits during the request.
+  async stopPlayback(): Promise<void> {
+    if (!this.agent || this.s.phase !== "running") return;
+    await this.agent.call("POST", "/v1/playback/stop");
   }
 
   private set(p: Partial<SupervisorState>) {

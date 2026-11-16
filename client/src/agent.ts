@@ -20,7 +20,8 @@ export interface AgentProcess {
   readonly baseUrl: string;
   // Resolves with the exit code (null when killed) once the process has exited.
   readonly exited: Promise<number | null>;
-  call<T = any>(method: "GET" | "POST" | "DELETE", path: string): Promise<T>;
+  // `payload` is sent as application/octet-stream.
+  call<T = any>(method: "GET" | "POST" | "DELETE", path: string, payload?: Uint8Array<ArrayBuffer>): Promise<T>;
   // Connects to the agent's SSE stream; resolves once connected. The stream ends
   // when the connection closes or `signal` aborts.
   openEvents(signal?: AbortSignal): Promise<AsyncGenerator<AgentEvent>>;
@@ -84,8 +85,9 @@ export async function startAgentProcess(o: AgentProcessOptions): Promise<AgentPr
   const baseUrl = `http://127.0.0.1:${ready.port}`;
   const headers = { Authorization: `Bearer ${token}` };
 
-  const call = async <T>(method: "GET" | "POST" | "DELETE", path: string): Promise<T> => {
-    const r = await fetch(baseUrl + path, { method, headers });
+  const call = async <T>(method: "GET" | "POST" | "DELETE", path: string, payload?: Uint8Array<ArrayBuffer>): Promise<T> => {
+    const r = await fetch(baseUrl + path, payload === undefined ? { method, headers }
+      : { method, headers: { ...headers, "Content-Type": "application/octet-stream" }, body: payload });
     const text = await r.text();
     let body: any = text;
     try {

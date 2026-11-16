@@ -13,8 +13,11 @@
 //   DELETE /v1/speaker                    forget the voiceprint (deletes the file)
 //   GET  /v1/hotwords                     loaded hotword list: path, characters, current character
 //   POST /v1/hotwords/reload[?path=FILE][&role=ID]   re-read the list and set the current character
+//   POST /v1/play?rate=HZ                 queue a clip (body: PCM s16le mono, 8000-48000 Hz, up to 60 s) on the
+//                                         default output device; clips play back to back; answers {id}
+//   POST /v1/playback/stop                stop the current clip and drop the queued ones
 //   GET  /v1/events                       SSE: status, speech_start, speech_end, final, command, speech_other,
-//                                         enroll_progress, enroll_failed, speaker, device, error
+//                                         enroll_progress, enroll_failed, speaker, device, playback, error
 // Every endpoint but /v1/health needs "Authorization: Bearer $MINTBOT_VOICE_TOKEN".
 // The process exits when stdin reaches EOF (the parent went away), on
 // /v1/shutdown, or on Ctrl+C. Logs go to stderr; stdout carries only the ready line.
@@ -34,6 +37,7 @@
 #include <functional>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -280,6 +284,29 @@ int main(int argc, char** argv) {
         }
         std::string reply;
         reply_json(res, engine.reload_hotwords(path, role, &reply) ? 200 : 400, reply);
+    });
+    svr.Post("/v1/play", [&](const httplib::Request& req, httplib::Response& res) {
+        const std::string r = req.has_param("rate") ? req.get_param_value("rate") : "";
+        const int rate = !r.empty() && r.size() <= 5 && r.find_first_not_of("0123456789") == std::string::npos ? atoi(r.c_str()) : 0;
+        if (rate < 8000 || rate > 48000) {
+            reply_json(res, 400, "{\"error\":\"rate must be 8000-48000 Hz\",\"code\":\"invalid_rate\"}");
+            return;
+        }
+        if (req.body.empty() || req.body.size() % 2) {
+            reply_json(res, 400, "{\"error\":\"the body must be PCM s16le mono samples\",\"code\":\"invalid_body\"}");
+            return;
+        }
+        if (req.body.size() / 2 > (size_t)rate * 60) {
+            reply_json(res, 413, "{\"error\":\"clips are limited to 60 s\",\"code\":\"too_long\"}");
+            return;
+        }
+        std::vector<int16_t> pcm(req.body.size() / 2);
+        memcpy(pcm.data(), req.body.data(), req.body.size());
+        reply_json(res, 200, agent::JsonObject().num("id", (int64_t)engine.play(rate, std::move(pcm))).dump());
+    });
+    svr.Post("/v1/playback/stop", [&](const httplib::Request&, httplib::Response& res) {
+        engine.stop_playback();
+        reply_json(res, 200, engine.playback_json());
     });
     svr.Post("/v1/shutdown", [&](const httplib::Request&, httplib::Response& res) {
         reply_json(res, 200, "{\"status\":\"shutting down\"}");

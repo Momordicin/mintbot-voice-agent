@@ -16,6 +16,8 @@ const inst = (await readInstallation(root, { apiVersion: API_VERSION }))
 const voice = new VoiceAgentSupervisor({ installation: inst, voiceprintPath, onEvent, onState });
 await voice.start();
 voice.setListening(false); // releases the microphone until setListening(true)
+const id = await voice.play(wav); // a PCM 16-bit mono WAV, after the clips before it; `playback` events by id
+await voice.stopPlayback();       // stops it and drops the queued clips
 await voice.stop();
 ```
 
@@ -31,8 +33,8 @@ const wav = await tts.synthesize({ text, textLang: "zh", refAudio, refText, prom
 await tts.dispose();
 ```
 
-Options, progress phases, error codes (`InstallErrorCode`, `TtsErrorCode`) and event payloads
-(`FinalEvent`, `CommandEvent`, `SpeechOtherEvent`, `SpeakerStatus`, `HotwordsStatus`, ...) are documented in the
+Options, progress phases, error codes (`InstallErrorCode`, `TtsErrorCode`, `PlaybackErrorCode`) and event payloads
+(`FinalEvent`, `CommandEvent`, `SpeechOtherEvent`, `SpeakerStatus`, `HotwordsStatus`, `PlaybackEvent`, ...) are documented in the
 comments of the TypeScript sources shipped in `src/`; with the declaration
 maps, "go to definition" in an editor opens them.
 

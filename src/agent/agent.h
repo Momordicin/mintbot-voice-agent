@@ -1,12 +1,15 @@
-// Always-on voice agent engine: capture -> VAD -> ASR -> speaker gate, published as JSON events.
+// Always-on voice agent engine: capture -> VAD -> ASR -> speaker gate, published as JSON events;
+// and speech playback on the default output device.
 #pragma once
 
 #include "agent/event_hub.h"
 #include "pipeline/pipeline.h"
 #include "spk/speaker_gate.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace mintbot::agent {
 
@@ -46,7 +49,12 @@ public:
 
     bool reload_hotwords(const std::string& path, const std::string& role, std::string* reply);
     std::string hotwords_json();
-    void shutdown();
+
+    // Queues a clip of s16 mono samples at `rate` Hz for playback; returns its id (see Player)
+    uint64_t play(int rate, std::vector<int16_t> pcm);
+    void stop_playback();
+    std::string playback_json();  // {"playing", "queued"}
+    void shutdown();  // also stops playback and releases the output device
 
 private:
     struct Impl;

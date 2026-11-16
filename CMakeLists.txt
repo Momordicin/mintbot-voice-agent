@@ -148,7 +148,7 @@ add_library(mpipeline STATIC src/pipeline/segmenter.cpp src/pipeline/pipeline.cp
 target_include_directories(mpipeline PUBLIC src)
 target_link_libraries(mpipeline PUBLIC mvad masr mdsp)
 
-add_library(magent STATIC src/agent/agent.cpp src/agent/audio_source.cpp)
+add_library(magent STATIC src/agent/agent.cpp src/agent/audio_source.cpp src/agent/player.cpp)
 target_include_directories(magent PUBLIC src PRIVATE third_party)
 target_link_libraries(magent PUBLIC mpipeline mspk)
 

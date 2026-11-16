@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { VoiceAgentSupervisor, type AgentEvent, type SupervisorOptions, type SupervisorState } from "../src/index.ts";
+import { PlaybackError, VoiceAgentSupervisor, type AgentEvent, type SupervisorOptions, type SupervisorState } from "../src/index.ts";
 
 const FAKE = path.join(path.dirname(fileURLToPath(import.meta.url)), "fake-agent.mjs");
 const installation = { version: "0.1.0", apiVersion: 1, exe: "unused.exe", vad: "v.gguf", asr: "a.gguf", speaker: "s.gguf" };
@@ -275,5 +275,81 @@ describe("setListening", () => {
     assert.equal(starts(), 0);
     assert.equal(sup.state.listening, false);
     assert.equal(sup.state.listenWanted, false);
+  });
+});
+
+function wav(o: { rate?: number; channels?: number; format?: number; bits?: number; samples?: number[]; extra?: boolean } = {}): Buffer {
+  const chunk = (id: string, body: Buffer) => {
+    const h = Buffer.alloc(8);
+    h.write(id, 0, "latin1");
+    h.writeUInt32LE(body.length, 4);
+    return Buffer.concat([h, body, Buffer.alloc(body.length & 1)]);
+  };
+  const fmt = Buffer.alloc(16);
+  fmt.writeUInt16LE(o.format ?? 1, 0);
+  fmt.writeUInt16LE(o.channels ?? 1, 2);
+  fmt.writeUInt32LE(o.rate ?? 32000, 4);
+  fmt.writeUInt16LE(o.bits ?? 16, 14);
+  const samples = o.samples ?? [1, -2, 300, -32768, 32767];
+  const data = Buffer.alloc(samples.length * 2);
+  samples.forEach((v, i) => data.writeInt16LE(v, i * 2));
+  const extra = o.extra ? [chunk("LIST", Buffer.from("INFOxyz", "latin1"))] : [];
+  const body = Buffer.concat([Buffer.from("WAVE", "latin1"), chunk("fmt ", fmt), ...extra, chunk("data", data)]);
+  return Buffer.concat([Buffer.from("RIFF", "latin1"), Buffer.from(Uint32Array.of(body.length).buffer), body]);
+}
+
+const plays = () => fakeLog().filter((l) => l.play).map((l) => l.play);
+
+describe("playback", () => {
+  it("play() posts the WAV's rate and its PCM bytes, and resolves with increasing ids", async () => {
+    const { sup } = make({ listen: false });
+    await sup.start();
+    const cases = [
+      { rate: 32000, samples: [1, -2, 300, -32768, 32767] },
+      { rate: 16000, samples: [5, 6, 7], extra: true },
+      { rate: 48000, samples: [0] },
+    ];
+    const ids: number[] = [];
+    for (const c of cases) ids.push(await sup.play(wav(c)));
+    assert.deepEqual(ids, [1, 2, 3]);
+    cases.forEach((c, i) => {
+      const pcm = Buffer.alloc(c.samples.length * 2);
+      c.samples.forEach((v, j) => pcm.writeInt16LE(v, j * 2));
+      assert.deepEqual(plays()[i], { rate: c.rate, type: "application/octet-stream", pcm: pcm.toString("base64") });
+    });
+  });
+
+  it("play() rejects a WAV that is not PCM 16-bit mono without a request", async () => {
+    const { sup } = make({ listen: false });
+    await sup.start();
+    const cases: [string, Buffer][] = [
+      ["stereo", wav({ channels: 2 })],
+      ["32-bit float", wav({ format: 3, bits: 32 })],
+      ["8-bit", wav({ bits: 8 })],
+      ["no WAV", Buffer.from("not a wav file")],
+    ];
+    for (const [what, bytes] of cases)
+      await assert.rejects(sup.play(bytes), (e: unknown) => e instanceof PlaybackError && e.code === "PLAYBACK_UNSUPPORTED_WAV", what);
+    assert.equal(reqs("POST /v1/play").length, 0);
+  });
+
+  it("play() rejects with PLAYBACK_NOT_RUNNING before start()", async () => {
+    const { sup } = make();
+    await assert.rejects(sup.play(wav()), (e: unknown) => e instanceof PlaybackError && e.code === "PLAYBACK_NOT_RUNNING");
+  });
+
+  it("playback events reach onEvent; stopPlayback() posts /v1/playback/stop", async () => {
+    const { sup, events } = make({ listen: false });
+    await sup.start();
+    await until("subscribed", () => events.some((e) => e.type === "status"));
+    const id = await sup.play(wav());
+    await until("start event", () => events.some((e) => e.type === "playback" && e.data.state === "start"));
+    await sup.stopPlayback();
+    assert.equal(reqs("POST /v1/playback/stop").length, 1);
+    await until("stopped event", () => events.some((e) => e.type === "playback" && e.data.state === "stopped"));
+    assert.deepEqual(events.filter((e) => e.type === "playback").map((e) => e.data), [
+      { state: "start", id },
+      { state: "stopped", id },
+    ]);
   });
 });
